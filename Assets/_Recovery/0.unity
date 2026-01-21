@@ -183,10 +183,10 @@ MonoBehaviour:
   inputBehaviour: {fileID: 163978638}
   occluderBehaviour: {fileID: 261017209}
   logger: {fileID: 163978640}
-  intervalSec: 10
+  intervalSec: 100
   occlusionSec: 0.9
   injectAt: 0.5
-  occlusionRatio: 40
+  occlusionRatio: 70
   allowManualTrigger: 1
   manualTriggerKey: 116
 --- !u!4 &163978637
@@ -245,7 +245,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::EventLogger
   condition: UI
-  occlusionRatio: 40
+  occlusionRatio: 70
 --- !u!1 &178716487 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: 9175999919911790680, guid: 7877b0a40432d4b49a012ee8444a74e4, type: 3}
@@ -873,125 +873,6 @@ Transform:
   m_Children:
   - {fileID: 1560501017}
   - {fileID: 742955015}
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!1 &1269424307
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 1269424312}
-  - component: {fileID: 1269424311}
-  - component: {fileID: 1269424310}
-  - component: {fileID: 1269424309}
-  - component: {fileID: 1269424308}
-  m_Layer: 0
-  m_Name: RDWSystem
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!114 &1269424308
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1269424307}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 33fe414dd01f4f148afb124d2f97fa90, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::WorldRotator
-  virtualWorldRoot: {fileID: 1255986907}
-  hmd: {fileID: 1286100803}
-  baseController: {fileID: 1269424310}
-  injectionController: {fileID: 1269424309}
-  totalYawRateMax: 20
-  smoothingTau: 0.2
-  reduceBaseDuringOcclusion: 0
-  baseScaleDuringOcclusion: 0.2
-  occlusionActive: 0
---- !u!114 &1269424309
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1269424307}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 501ca1c28bb6457489aecedc0e6ef911, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::RotationInjectionController
-  playArea: {fileID: 1269424311}
-  maskingEventManager: {fileID: 163978636}
-  enableInjection: 1
-  defaultThetaEventDeg: 10
-  thetaHardMax: 25
-  dMinNoEvent: 0.4
-  dSafeForMax: 1.2
-  thetaMinAtDmin: 4
-  thetaMaxAtDsafe: 18
-  eventDuration: 0.9
-  injectAt: 0.5
-  injectWindowRatio: 0.55
-  logDebug: 1
---- !u!114 &1269424310
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1269424307}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 08ed259a6ff6ef140866b0dc4ce9fdef, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::BaseSteeringController
-  playArea: {fileID: 1269424311}
-  enableBase: 1
-  boundaryBuffer: 1
-  baseYawRateMax: 8
-  minWalkingSpeed: 0.12
-  speedSmoothingTau: 0.25
-  turnSignStableSec: 0.5
-  allowWhenTurnSignZero: 0
-  logDebug: 0
---- !u!114 &1269424311
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1269424307}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f7259f40f2ceee6448ea23443001526d, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::PlayAreaRectProvider
-  hmd: {fileID: 1286100803}
-  width: 3
-  depth: 3
-  lockCenterAtStart: 1
-  drawGizmos: 1
---- !u!4 &1269424312
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1269424307}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!20 &1286100799 stripped
@@ -6592,4 +6473,3 @@ SceneRoots:
   - {fileID: 1707507600}
   - {fileID: 163978637}
   - {fileID: 520564501}
-  - {fileID: 1269424312}
