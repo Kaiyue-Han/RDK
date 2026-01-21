@@ -100,7 +100,7 @@ public class MaskingEventManager : MonoBehaviour
         Debug.Log($"[MaskingEvent] StartOcclusion called. ratio={occlusionRatio}");
         Debug.Log($"[MaskingEvent] occluder null? {occluder == null}");
 
-        occluder?.Show(occlusionRatio);
+        occluder?.Show(occlusionRatio, occlusionSec);
 
         float rt = occlusionStartTime - rainStartTime;
         logger?.Mark("OCCLUSION_START", rtSec: rt);

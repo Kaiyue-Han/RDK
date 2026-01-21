@@ -14,7 +14,7 @@ public class UIOccluder : MonoBehaviour, IOccluder
         Hide();
     }
 
-    public void Show(int ratio)
+    public void Show(int ratio, float durationSec)
     {
         if (canvas) canvas.enabled = true;
 
