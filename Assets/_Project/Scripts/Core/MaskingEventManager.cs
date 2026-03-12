@@ -5,8 +5,8 @@ public class MaskingEventManager : MonoBehaviour
 {
     [Header("Modules (drag components here)")]
     public RainCueController rain;
-    public MonoBehaviour inputBehaviour;   // drag XRPrimaryButtonInput
-    public MonoBehaviour occluderBehaviour; // drag UIOccluder
+    public MonoBehaviour inputBehaviour;     // drag XRPrimaryButtonInput
+    public MonoBehaviour occluderBehaviour;  // drag UIOccluder / UmbrellaOccluder
     public EventLogger logger;
 
     [Header("Timing")]
@@ -15,7 +15,7 @@ public class MaskingEventManager : MonoBehaviour
     [Range(0f, 1f)] public float injectAt = 0.5f; // 0.5 = mid
 
     [Header("Condition")]
-    public int occlusionRatio = 40; // 40/70 (manager decides; logger/occluder read this too)
+    public int occlusionRatio = 40; // 40/70
 
     [Header("Debug")]
     public bool allowManualTrigger = true;
@@ -23,26 +23,21 @@ public class MaskingEventManager : MonoBehaviour
 
     public event Action OnInjectPoint; // 给RDW订阅
 
-    IButtonInput input;
-    IOccluder occluder;
+    private IButtonInput input;
+    private IOccluder occluder;
 
-    enum State { Idle, WaitButton, Occlusion }
-    State state = State.Idle;
+    private enum State { Idle, WaitButton, Occlusion }
+    private State state = State.Idle;
 
-    float nextEventTime;
-    float rainStartTime;
-    float occlusionStartTime;
-    bool injectFired;
+    private float nextEventTime;
+    private float rainStartTime;
+    private float occlusionStartTime;
+    private bool injectFired;
 
     void Awake()
     {
-        input = inputBehaviour as IButtonInput;
-        occluder = occluderBehaviour as IOccluder;
+        RebindModules();
 
-        if (input == null)
-            Debug.LogError("[MaskingEvent] inputBehaviour must implement IButtonInput.");
-        if (occluder == null)
-            Debug.LogError("[MaskingEvent] occluderBehaviour must implement IOccluder.");
         if (logger == null)
             Debug.LogWarning("[MaskingEvent] logger not assigned (no csv output).");
     }
@@ -76,11 +71,87 @@ public class MaskingEventManager : MonoBehaviour
         }
     }
 
+    // =========================
+    // ✅ Added for UI control
+    // =========================
+
+    /// <summary>
+    /// Called by UI: set occlusion ratio (40/70) and sync to logger.
+    /// </summary>
+    public void SetOcclusionRatio(int ratio)
+    {
+        occlusionRatio = ratio;
+        if (logger != null) logger.occlusionRatio = occlusionRatio;
+    }
+
+    /// <summary>
+    /// Called by UI: swap occluder behaviour at runtime and rebind IOccluder.
+    /// </summary>
+    public void SetOccluderBehaviour(MonoBehaviour newOccluder)
+    {
+        AbortAndResetToIdle(); 
+        occluderBehaviour = newOccluder;
+        RebindOccluderOnly();
+        occluder?.Hide(); // keep clean state
+    }
+
+    /// <summary>
+    /// Called by UI: abort current event and reset state machine to Idle.
+    /// </summary>
+    public void AbortAndResetToIdle()
+    {
+        occluder?.Hide();
+        rain?.StopRain();
+        logger?.Mark("ABORT_RESET");
+
+        state = State.Idle;
+        nextEventTime = Time.time + intervalSec;
+
+        Debug.Log("[MaskingEvent] AbortAndResetToIdle.");
+    }
+
+    /// <summary>
+    /// Optional: if UI needs to swap input behaviour too.
+    /// </summary>
+    public void SetInputBehaviour(MonoBehaviour newInput)
+    {
+        inputBehaviour = newInput;
+        RebindInputOnly();
+    }
+
+    // =========================
+    // Binding helpers
+    // =========================
+
+    private void RebindModules()
+    {
+        RebindInputOnly();
+        RebindOccluderOnly();
+    }
+
+    private void RebindInputOnly()
+    {
+        input = inputBehaviour as IButtonInput;
+        if (input == null)
+            Debug.LogError("[MaskingEvent] inputBehaviour must implement IButtonInput.");
+    }
+
+    private void RebindOccluderOnly()
+    {
+        occluder = occluderBehaviour as IOccluder;
+        if (occluder == null)
+            Debug.LogError("[MaskingEvent] occluderBehaviour must implement IOccluder.");
+    }
+
+    // =========================
+    // Original logic
+    // =========================
+
     void TriggerRainEvent()
     {
         rainStartTime = Time.time;
 
-        // 更新日志和遮挡器的 ratio（方便你未来在manager里随机40/70）
+        // sync ratio to logger
         if (logger != null) logger.occlusionRatio = occlusionRatio;
 
         rain?.StartRain();

@@ -4,6 +4,7 @@ public class PlayAreaRectProvider : MonoBehaviour
 {
     [Header("References")]
     public Transform hmd; // Main Camera
+    public PhysicalPositionTracker physicalTracker;
 
     [Header("Rect Play Area (meters)")]
     public float width = 3f;
@@ -25,16 +26,23 @@ public class PlayAreaRectProvider : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// 现在返回的是“现实世界位置”：
+    /// 来自 PhysicalPositionTracker，而不是 HMD 世界坐标。
+    /// </summary>
     public Vector2 GetHmdXZ()
     {
-        if (hmd == null) return Vector2.zero;
-        Vector3 p = hmd.position;
-        return new Vector2(p.x, p.z);
+        if (physicalTracker == null) return Vector2.zero;
+        return physicalTracker.PhysicalPositionXZ;
     }
 
+    /// <summary>
+    /// 朝向仍然先用 HMD forward。
+    /// </summary>
     public Vector2 GetHmdForwardXZ()
     {
         if (hmd == null) return Vector2.zero;
+
         Vector3 f3 = hmd.forward;
         Vector2 f = new Vector2(f3.x, f3.z);
         float m2 = f.sqrMagnitude;

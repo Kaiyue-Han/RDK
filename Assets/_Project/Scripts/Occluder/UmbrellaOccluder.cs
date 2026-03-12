@@ -27,7 +27,7 @@ public class UmbrellaOccluder : MonoBehaviour, IOccluder
         if (!visualAnimator)
             visualAnimator = GetComponentInChildren<Animator>(true);
 
-        gameObject.SetActive(false);
+        Hide();
     }
 
     public void Show(int ratio, float durationSec)
@@ -92,4 +92,5 @@ public class UmbrellaOccluder : MonoBehaviour, IOccluder
         if (visualAnimator) visualAnimator.speed = 1f;
         gameObject.SetActive(false);
     }
+
 }

@@ -5,6 +5,7 @@ public class RotationInjectionController : MonoBehaviour
     [Header("Dependencies")]
     public PlayAreaRectProvider playArea;
     public MaskingEventManager maskingEventManager;
+    public WalkingDetector walkingDetector;
 
     [Header("Injection settings")]
     public bool enableInjection = true;
@@ -29,8 +30,6 @@ public class RotationInjectionController : MonoBehaviour
     float startTime;
     float appliedAngle;
     float signedTheta;
-
-    // 由 WorldRotator 在当前帧更新这个值（确保注入同向于base）
     float cachedBaseYawRate;
 
     void Awake()
@@ -49,7 +48,6 @@ public class RotationInjectionController : MonoBehaviour
             maskingEventManager.OnInjectPoint -= OnInjectPoint;
     }
 
-    /// <summary>WorldRotator 每帧调用：把当前 baseYawRate 传进来，保证同向规则</summary>
     public void SetBaseYawRateForThisFrame(float baseYawRate)
     {
         cachedBaseYawRate = baseYawRate;
@@ -60,7 +58,12 @@ public class RotationInjectionController : MonoBehaviour
         if (!enableInjection) return;
         if (playArea == null) return;
 
-        // base 必须足够大才注入（同向规则）
+        if (walkingDetector != null && !walkingDetector.IsWalking)
+        {
+            if (logDebug) Debug.Log("[Inject] walkingDetector=false, skip");
+            return;
+        }
+
         if (Mathf.Abs(cachedBaseYawRate) < 1.0f)
         {
             if (logDebug) Debug.Log("[Inject] |base| too small, skip");
@@ -69,7 +72,6 @@ public class RotationInjectionController : MonoBehaviour
 
         float baseSign = Mathf.Sign(cachedBaseYawRate);
 
-        // 距离裁剪
         float d = playArea.DistanceToBoundary(playArea.GetHmdXZ());
         if (d < dMinNoEvent)
         {
