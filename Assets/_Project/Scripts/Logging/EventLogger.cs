@@ -72,7 +72,7 @@ public class EventLogger : MonoBehaviour
     {
         WriteRow(new LogRow
         {
-            mark = "TRIAL_RESULT",
+            mark = "STAIRCASE_RESULT",
             conditionKey = conditionKey,
             occlusionRatio = ratio.ToString(CultureInfo.InvariantCulture),
             success = BoolString(success),
@@ -82,7 +82,7 @@ public class EventLogger : MonoBehaviour
 
     public void LogTrialResult(MaskingEventManager maskingEventManager, float confirmedTheta, bool success)
     {
-        LogRow row = CreateConditionRow("TRIAL_RESULT", maskingEventManager);
+        LogRow row = CreateConditionRow("STAIRCASE_RESULT", maskingEventManager);
         row.success = BoolString(success);
         row.estimatedThresholdDeg = FormatFloat(confirmedTheta);
         WriteRow(row);
@@ -226,10 +226,9 @@ public class EventLogger : MonoBehaviour
     public void LogStaircaseEvaluation(
         string mark,
         MaskingEventManager maskingEventManager,
-        string phase,
         float testThetaDeg,
         bool noticed,
-        bool validTrial,
+        bool? validTrial,
         float currentStepDeg,
         float staircaseDeltaDeg,
         float nextThetaDeg,
@@ -243,7 +242,7 @@ public class EventLogger : MonoBehaviour
         LogRow row = CreateConditionRow(mark, maskingEventManager);
         row.testThetaDeg = FormatFloat(testThetaDeg);
         row.noticed = BoolString(noticed);
-        row.validTrial = BoolString(validTrial);
+        row.validTrial = validTrial.HasValue ? BoolString(validTrial.Value) : "";
         row.invalidReason = invalidReason;
         row.currentStepDeg = FormatFloat(currentStepDeg);
         row.staircaseDeltaDeg = FormatFloat(staircaseDeltaDeg);
@@ -251,7 +250,7 @@ public class EventLogger : MonoBehaviour
         row.isReversal = BoolString(isReversal);
         row.reversalIndex = reversalIndex > 0 ? reversalIndex.ToString(CultureInfo.InvariantCulture) : "";
         row.reversalCount = reversalCount.ToString(CultureInfo.InvariantCulture);
-        row.extra = MergeExtra(extra, string.IsNullOrEmpty(phase) ? "" : $"legacyPhase={phase}");
+        row.extra = extra;
         WriteRow(row);
     }
 
@@ -270,7 +269,6 @@ public class EventLogger : MonoBehaviour
     {
         LogRow row = CreateConditionRow(mark, maskingEventManager);
         row.success = BoolString(success);
-        row.validTrial = BoolString(true);
         row.estimatedThresholdDeg = FormatFloat(estimatedThresholdDeg);
         row.usedReversals = usedReversals;
         row.allReversals = allReversals;

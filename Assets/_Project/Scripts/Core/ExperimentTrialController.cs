@@ -51,7 +51,8 @@ public class ExperimentTrialController : MonoBehaviour
     public bool TrialFinished => trialFinished;
     public bool TrialPaused => trialPaused;
     public string CurrentConditionName => currentConditionName;
-    public float FinalConfirmedThetaDeg => finalConfirmedThetaDeg;
+    public float FinalEstimatedThresholdDeg => finalConfirmedThetaDeg;
+    public float FinalConfirmedThetaDeg => finalConfirmedThetaDeg; // Backward-compatible UI alias.
     public bool FinalSuccess => finalSuccess;
 
     private void Awake()
@@ -193,15 +194,17 @@ public class ExperimentTrialController : MonoBehaviour
             );
         }
 
-        searchFlowController.StartSearch();
-
         if (eventLogger != null)
         {
             eventLogger.Mark(
                 "TRIAL_START",
-                maskingEventManager
+                maskingEventManager,
+                -1f,
+                searchFlowController.BuildStaircaseStartExtra()
             );
         }
+
+        searchFlowController.StartSearch();
 
         if (experimentUIController != null)
         {
@@ -357,14 +360,15 @@ public class ExperimentTrialController : MonoBehaviour
         abortHoldActive = false;
         abortHoldStartTime = -1f;
 
-        finalSuccess = searchFlowController.HasConfirmedUpperAcceptableTheta;
-        finalConfirmedThetaDeg = searchFlowController.ConfirmedUpperAcceptableThetaDeg;
+        finalSuccess = searchFlowController.HasEstimatedThreshold && searchFlowController.ThresholdReliable;
+        finalConfirmedThetaDeg = searchFlowController.EstimatedThresholdDeg;
 
         if (debugLog)
         {
             Debug.Log(
                 $"[ExperimentTrialController] Trial finished. " +
-                $"Condition={currentConditionName}, Success={finalSuccess}, Theta={finalConfirmedThetaDeg:F2}",
+                $"Condition={currentConditionName}, Success={finalSuccess}, EstimatedThreshold={finalConfirmedThetaDeg:F2}, " +
+                $"StopReason={searchFlowController.StopReason}",
                 this
             );
         }
@@ -373,13 +377,9 @@ public class ExperimentTrialController : MonoBehaviour
         {
             eventLogger.Mark(
                 "TRIAL_FINISH",
-                maskingEventManager
-            );
-
-            eventLogger.LogTrialResult(
                 maskingEventManager,
-                finalConfirmedThetaDeg,
-                finalSuccess
+                -1f,
+                $"stopReason={searchFlowController.StopReason};thresholdReliable={searchFlowController.ThresholdReliable.ToString().ToLowerInvariant()}"
             );
 
             resultLogged = true;

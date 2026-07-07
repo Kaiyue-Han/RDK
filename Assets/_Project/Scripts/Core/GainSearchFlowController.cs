@@ -1,3 +1,6 @@
+using System.Collections.Generic;
+using System.Globalization;
+using System.Text;
 using UnityEngine;
 
 public class GainSearchFlowController : MonoBehaviour
@@ -5,10 +8,15 @@ public class GainSearchFlowController : MonoBehaviour
     public enum SearchPhase
     {
         Idle,
-        Coarse,
-        Fine,
-        Confirm,
+        Staircase,
         Finished
+    }
+
+    public enum StaircaseStartMode
+    {
+        HighStart,
+        LowStart,
+        Custom
     }
 
     [Header("References")]
@@ -18,14 +26,26 @@ public class GainSearchFlowController : MonoBehaviour
     [SerializeField] private MaskingEventManager maskingEventManager;
     [SerializeField] private EventLogger eventLogger;
 
-    [Header("Search Parameters")]
-    [SerializeField] private float startThetaDeg = 10f;
-    [SerializeField] private float coarseStepDeg = 2f;
-    [SerializeField] private float fineStepDeg = 1f;
+    [Header("Staircase Start")]
+    [SerializeField] private StaircaseStartMode startMode = StaircaseStartMode.HighStart;
+    [SerializeField] private float highStartThetaDeg = 20f;
+    [SerializeField] private float lowStartThetaDeg = 10f;
+    [SerializeField] private float customStartThetaDeg = 20f;
+
+    [Header("Staircase Parameters")]
+    [SerializeField] private float initialStepDeg = 2f;
+    [SerializeField] private float finalStepDeg = 1f;
+    [SerializeField] private int stepReductionAfterReversals = 2;
+    [SerializeField] private int targetReversalCount = 8;
+    [SerializeField] private int ignoreFirstReversals = 2;
+    [SerializeField] private int maxValidTrials = 30;
+    [SerializeField] private float minThetaDeg = 0f;
+    [SerializeField] private float maxThetaDeg = 25f;
 
     [Header("Auto Finish Evaluation")]
+    [Tooltip("Evaluation is automatically finished this many seconds after occlusion ends. Feedback is only counted after injection starts.")]
     [SerializeField] private bool autoFinishAfterOcclusionEnd = true;
-    [SerializeField] private float autoFinishDelaySec = 0.15f;
+    [SerializeField] private float autoFinishDelaySec = 1.0f;
 
     [Header("Debug Keyboard")]
     [SerializeField] private bool enableDebugKeyboard = true;
@@ -37,21 +57,40 @@ public class GainSearchFlowController : MonoBehaviour
     [SerializeField] private bool debugLog = true;
 
     public SearchPhase Phase => phase;
-    public float CurrentSafeThetaDeg => currentSafeThetaDeg;
+    public StaircaseStartMode StartMode => startMode;
     public float CurrentTestThetaDeg => currentTestThetaDeg;
-    public float ConfirmedUpperAcceptableThetaDeg => confirmedUpperAcceptableThetaDeg;
-    public bool HasConfirmedUpperAcceptableTheta => hasConfirmedUpperAcceptableTheta;
+    public float CurrentStepDeg => currentStepDeg;
+    public int ValidTrialCount => validTrialCount;
+    public int ReversalCount => reversalThetas.Count;
+    public int TargetReversalCount => targetReversalCount;
+    public int MaxValidTrials => Mathf.Max(1, maxValidTrials);
+    public float EstimatedThresholdDeg => estimatedThresholdDeg;
+    public bool HasEstimatedThreshold => hasEstimatedThreshold;
+    public bool ThresholdReliable => thresholdReliable;
+    public string StopReason => stopReason;
+
+    // Backward-compatible names used by old UI/controller code.
+    // After the staircase refactor, these represent the estimated staircase threshold.
+    public float CurrentSafeThetaDeg => hasEstimatedThreshold ? estimatedThresholdDeg : 0f;
+    public float ConfirmedUpperAcceptableThetaDeg => estimatedThresholdDeg;
+    public bool HasConfirmedUpperAcceptableTheta => hasEstimatedThreshold;
 
     public bool NeedsEvaluationTrigger => evaluationPending && !evaluationInProgress;
     public bool IsEvaluationInProgress => evaluationInProgress;
 
     private SearchPhase phase = SearchPhase.Idle;
 
-    private float currentSafeThetaDeg;
     private float currentTestThetaDeg;
+    private float currentStepDeg;
+    private float lastStaircaseDeltaDeg = 0f;
 
-    private float confirmedUpperAcceptableThetaDeg;
-    private bool hasConfirmedUpperAcceptableTheta = false;
+    private readonly List<float> reversalThetas = new List<float>();
+    private int validTrialCount = 0;
+
+    private float estimatedThresholdDeg = 0f;
+    private bool hasEstimatedThreshold = false;
+    private bool thresholdReliable = false;
+    private string stopReason = "NONE";
 
     private bool noticedDuringCurrentEvaluation = false;
 
@@ -77,18 +116,13 @@ public class GainSearchFlowController : MonoBehaviour
     {
         Debug.Log("[GainSearchFlowController] Start called.", this);
 
-        currentSafeThetaDeg = startThetaDeg;
-        currentTestThetaDeg = startThetaDeg;
+        currentTestThetaDeg = GetConfiguredStartTheta();
+        currentStepDeg = Mathf.Max(0.001f, initialStepDeg);
         ApplyCurrentTestThetaToInjection();
     }
 
     private void Update()
     {
-        if (Input.GetKeyDown(KeyCode.F5))
-        {
-            Debug.Log("[GainSearchFlowController] Raw F5 detected.", this);
-        }
-
         if (enableDebugKeyboard)
         {
             if (Input.GetKeyDown(startSearchKey))
@@ -112,19 +146,7 @@ public class GainSearchFlowController : MonoBehaviour
 
         if (participantFeedback.ConsumeFeedback())
         {
-            if (evaluationInProgress)
-            {
-                noticedDuringCurrentEvaluation = true;
-
-                if (debugLog)
-                {
-                    Debug.Log(
-                        $"[GainSearchFlowController] Feedback noticed during current evaluation. Phase={phase}",
-                        this
-                    );
-                }
-            }
-            else
+            if (!evaluationInProgress)
             {
                 if (debugLog)
                 {
@@ -134,19 +156,57 @@ public class GainSearchFlowController : MonoBehaviour
                         this
                     );
                 }
+
+                return;
+            }
+
+            // Backend feedback window: feedback is counted only after the injection has actually started.
+            // This avoids counting reactions to the occluder itself before the redirection event begins.
+            if (injectionController == null || !injectionController.CurrentEvaluationInjectionStarted)
+            {
+                if (debugLog)
+                {
+                    string outcome = injectionController != null
+                        ? injectionController.CurrentEvaluationInjectionOutcome
+                        : "NO_INJECTION_CONTROLLER";
+
+                    Debug.Log(
+                        $"[GainSearchFlowController] Feedback ignored before injection start. Outcome={outcome}",
+                        this
+                    );
+                }
+
+                return;
+            }
+
+            noticedDuringCurrentEvaluation = true;
+
+            if (debugLog)
+            {
+                Debug.Log(
+                    $"[GainSearchFlowController] Feedback noticed during current evaluation. Phase={phase}",
+                    this
+                );
             }
         }
     }
 
     public void StartSearch()
     {
-        phase = SearchPhase.Coarse;
+        phase = SearchPhase.Staircase;
 
-        currentSafeThetaDeg = startThetaDeg;
-        currentTestThetaDeg = startThetaDeg;
+        currentTestThetaDeg = GetConfiguredStartTheta();
+        currentStepDeg = Mathf.Max(0.001f, initialStepDeg);
+        lastStaircaseDeltaDeg = 0f;
 
-        confirmedUpperAcceptableThetaDeg = 0f;
-        hasConfirmedUpperAcceptableTheta = false;
+        reversalThetas.Clear();
+        validTrialCount = 0;
+
+        estimatedThresholdDeg = 0f;
+        hasEstimatedThreshold = false;
+        thresholdReliable = false;
+        stopReason = "RUNNING";
+
         noticedDuringCurrentEvaluation = false;
 
         evaluationPending = true;
@@ -166,25 +226,31 @@ public class GainSearchFlowController : MonoBehaviour
         if (recordTriggerController != null)
             recordTriggerController.ResetTriggerState();
 
-        if (eventLogger != null && maskingEventManager != null)
-        {
-            eventLogger.LogSearchEvent(
-                "SEARCH_START",
-                maskingEventManager,
-                phase.ToString(),
-                currentTestThetaDeg,
-                currentSafeThetaDeg
-            );
-        }
-
         if (debugLog)
         {
             Debug.Log(
-                $"[GainSearchFlowController] Search started. " +
-                $"Phase={phase}, Safe={currentSafeThetaDeg}, Test={currentTestThetaDeg}, Pending={evaluationPending}",
+                $"[GainSearchFlowController] Staircase started. " +
+                $"StartMode={startMode}, Test={currentTestThetaDeg}, Step={currentStepDeg}, " +
+                $"TargetReversals={targetReversalCount}, MaxValidTrials={Mathf.Max(1, maxValidTrials)}, Pending={evaluationPending}",
                 this
             );
         }
+    }
+
+    public string BuildStaircaseStartExtra()
+    {
+        return
+            $"searchMethod=Staircase;" +
+            $"startMode={startMode};" +
+            $"startThetaDeg={FormatFloat(GetConfiguredStartTheta())};" +
+            $"initialStepDeg={FormatFloat(initialStepDeg)};" +
+            $"finalStepDeg={FormatFloat(finalStepDeg)};" +
+            $"stepReductionAfterReversals={stepReductionAfterReversals};" +
+            $"targetReversalCount={targetReversalCount};" +
+            $"ignoreFirstReversals={ignoreFirstReversals};" +
+            $"maxValidTrials={Mathf.Max(1, maxValidTrials)};" +
+            $"minThetaDeg={FormatFloat(minThetaDeg)};" +
+            $"maxThetaDeg={FormatFloat(maxThetaDeg)}";
     }
 
     public void NotifyEvaluationTriggered()
@@ -229,21 +295,26 @@ public class GainSearchFlowController : MonoBehaviour
 
         if (eventLogger != null && maskingEventManager != null)
         {
-            eventLogger.LogEvaluation(
-                "EVAL_START",
+            eventLogger.LogStaircaseEvaluation(
+                "STAIRCASE_EVAL_START",
                 maskingEventManager,
-                phase.ToString(),
                 currentTestThetaDeg,
-                currentSafeThetaDeg,
-                false
+                false,
+                null,
+                currentStepDeg,
+                0f,
+                currentTestThetaDeg,
+                false,
+                0,
+                reversalThetas.Count
             );
         }
 
         if (debugLog)
         {
             Debug.Log(
-                $"[GainSearchFlowController] Evaluation triggered. " +
-                $"Phase={phase}, Test={currentTestThetaDeg}, Pending={evaluationPending}, InProgress={evaluationInProgress}",
+                $"[GainSearchFlowController] Staircase evaluation started. " +
+                $"Test={currentTestThetaDeg}, Step={currentStepDeg}, Pending={evaluationPending}, InProgress={evaluationInProgress}",
                 this
             );
         }
@@ -276,9 +347,7 @@ public class GainSearchFlowController : MonoBehaviour
             return;
         }
 
-        string phaseBeforeFinish = phase.ToString();
         float testThetaBeforeFinish = currentTestThetaDeg;
-        float safeThetaBeforeFinish = currentSafeThetaDeg;
         bool noticedBeforeFinish = noticedDuringCurrentEvaluation;
 
         bool injectionActuallyStarted =
@@ -287,21 +356,26 @@ public class GainSearchFlowController : MonoBehaviour
 
         if (!injectionActuallyStarted)
         {
+            string outcome = injectionController != null
+                ? injectionController.CurrentEvaluationInjectionOutcome
+                : "NO_INJECTION_CONTROLLER";
+
             if (eventLogger != null && maskingEventManager != null)
             {
-                string outcome = injectionController != null
-                    ? injectionController.CurrentEvaluationInjectionOutcome
-                    : "NO_INJECTION_CONTROLLER";
-
-                eventLogger.LogInvalidEvaluation(
-                    "EVAL_FINISH_INVALID_NO_INJECTION",
+                eventLogger.LogStaircaseEvaluation(
+                    "STAIRCASE_EVAL_FINISH",
                     maskingEventManager,
-                    phaseBeforeFinish,
                     testThetaBeforeFinish,
-                    safeThetaBeforeFinish,
                     noticedBeforeFinish,
+                    false,
+                    currentStepDeg,
+                    0f,
+                    currentTestThetaDeg,
+                    false,
+                    0,
+                    reversalThetas.Count,
                     "NO_INJECTION_STARTED",
-                    outcome
+                    $"injectionOutcome={outcome};retrySameTheta=true"
                 );
             }
 
@@ -317,10 +391,6 @@ public class GainSearchFlowController : MonoBehaviour
 
             if (debugLog)
             {
-                string outcome = injectionController != null
-                    ? injectionController.CurrentEvaluationInjectionOutcome
-                    : "NO_INJECTION_CONTROLLER";
-
                 Debug.LogWarning(
                     $"[GainSearchFlowController] Evaluation invalid: no injection started. " +
                     $"Outcome={outcome}. Theta not updated.",
@@ -331,33 +401,7 @@ public class GainSearchFlowController : MonoBehaviour
             return;
         }
 
-        switch (phase)
-        {
-            case SearchPhase.Coarse:
-                HandleCoarseEvaluationFinished();
-                break;
-
-            case SearchPhase.Fine:
-                HandleFineEvaluationFinished();
-                break;
-
-            case SearchPhase.Confirm:
-                HandleConfirmEvaluationFinished();
-                break;
-        }
-
-        if (eventLogger != null && maskingEventManager != null)
-        {
-            eventLogger.LogEvaluation(
-                "EVAL_FINISH",
-                maskingEventManager,
-                phaseBeforeFinish,
-                testThetaBeforeFinish,
-                safeThetaBeforeFinish,
-                noticedBeforeFinish,
-                true
-            );
-        }
+        ProcessValidStaircaseEvaluation(testThetaBeforeFinish, noticedBeforeFinish);
 
         noticedDuringCurrentEvaluation = false;
         evaluationInProgress = false;
@@ -378,8 +422,9 @@ public class GainSearchFlowController : MonoBehaviour
         if (debugLog)
         {
             Debug.Log(
-                $"[GainSearchFlowController] Evaluation finished. " +
-                $"Phase={phase}, Safe={currentSafeThetaDeg}, Test={currentTestThetaDeg}, " +
+                $"[GainSearchFlowController] Staircase evaluation finished. " +
+                $"Phase={phase}, Test={currentTestThetaDeg}, Step={currentStepDeg}, " +
+                $"ValidTrials={validTrialCount}, Reversals={reversalThetas.Count}, " +
                 $"Pending={evaluationPending}, InProgress={evaluationInProgress}",
                 this
             );
@@ -388,18 +433,8 @@ public class GainSearchFlowController : MonoBehaviour
 
     public void StopSearch()
     {
-        if (eventLogger != null && maskingEventManager != null)
-        {
-            eventLogger.LogSearchEvent(
-                "SEARCH_STOP",
-                maskingEventManager,
-                phase.ToString(),
-                currentTestThetaDeg,
-                currentSafeThetaDeg
-            );
-        }
-
         phase = SearchPhase.Finished;
+        stopReason = "STOP_SEARCH";
         evaluationPending = false;
         evaluationInProgress = false;
         noticedDuringCurrentEvaluation = false;
@@ -423,20 +458,26 @@ public class GainSearchFlowController : MonoBehaviour
     {
         if (eventLogger != null && maskingEventManager != null)
         {
-            eventLogger.LogSearchEvent(
-                "SEARCH_RESET",
+            eventLogger.LogResetEvent(
+                "MANUAL_RESET",
                 maskingEventManager,
-                phase.ToString(),
-                currentTestThetaDeg,
-                currentSafeThetaDeg
+                "SearchReset"
             );
         }
 
         phase = SearchPhase.Idle;
-        currentSafeThetaDeg = startThetaDeg;
-        currentTestThetaDeg = startThetaDeg;
-        confirmedUpperAcceptableThetaDeg = 0f;
-        hasConfirmedUpperAcceptableTheta = false;
+        currentTestThetaDeg = GetConfiguredStartTheta();
+        currentStepDeg = Mathf.Max(0.001f, initialStepDeg);
+        lastStaircaseDeltaDeg = 0f;
+
+        reversalThetas.Clear();
+        validTrialCount = 0;
+
+        estimatedThresholdDeg = 0f;
+        hasEstimatedThreshold = false;
+        thresholdReliable = false;
+        stopReason = "RESET";
+
         noticedDuringCurrentEvaluation = false;
 
         evaluationPending = false;
@@ -460,7 +501,7 @@ public class GainSearchFlowController : MonoBehaviour
         {
             Debug.Log(
                 $"[GainSearchFlowController] Search reset. " +
-                $"Phase={phase}, Safe={currentSafeThetaDeg}, Test={currentTestThetaDeg}",
+                $"Phase={phase}, Test={currentTestThetaDeg}, Step={currentStepDeg}",
                 this
             );
         }
@@ -486,153 +527,184 @@ public class GainSearchFlowController : MonoBehaviour
         }
     }
 
-    private void HandleCoarseEvaluationFinished()
+    private void ProcessValidStaircaseEvaluation(float testThetaBeforeFinish, bool noticedBeforeFinish)
     {
-        if (!noticedDuringCurrentEvaluation)
-        {
-            currentSafeThetaDeg = currentTestThetaDeg;
-            currentTestThetaDeg += coarseStepDeg;
+        validTrialCount++;
 
-            if (debugLog)
+        int deltaSign = noticedBeforeFinish ? -1 : 1;
+        bool isReversal = Mathf.Abs(lastStaircaseDeltaDeg) > 0.0001f &&
+                          Mathf.Sign(lastStaircaseDeltaDeg) != deltaSign;
+
+        int reversalIndex = 0;
+        if (isReversal)
+        {
+            reversalThetas.Add(testThetaBeforeFinish);
+            reversalIndex = reversalThetas.Count;
+        }
+
+        currentStepDeg = reversalThetas.Count >= Mathf.Max(0, stepReductionAfterReversals)
+            ? Mathf.Max(0.001f, finalStepDeg)
+            : Mathf.Max(0.001f, initialStepDeg);
+
+        float staircaseDeltaDeg = deltaSign * currentStepDeg;
+        float nextThetaDeg = Mathf.Clamp(testThetaBeforeFinish + staircaseDeltaDeg, minThetaDeg, maxThetaDeg);
+
+        if (eventLogger != null && maskingEventManager != null)
+        {
+            eventLogger.LogStaircaseEvaluation(
+                "STAIRCASE_EVAL_FINISH",
+                maskingEventManager,
+                testThetaBeforeFinish,
+                noticedBeforeFinish,
+                true,
+                currentStepDeg,
+                staircaseDeltaDeg,
+                nextThetaDeg,
+                isReversal,
+                reversalIndex,
+                reversalThetas.Count
+            );
+
+            if (isReversal)
             {
-                Debug.Log(
-                    $"[GainSearchFlowController] Coarse accepted. " +
-                    $"New Safe={currentSafeThetaDeg}, Next Test={currentTestThetaDeg}",
-                    this
+                eventLogger.LogStaircaseEvaluation(
+                    "STAIRCASE_REVERSAL",
+                    maskingEventManager,
+                    testThetaBeforeFinish,
+                    noticedBeforeFinish,
+                    true,
+                    currentStepDeg,
+                    staircaseDeltaDeg,
+                    nextThetaDeg,
+                    true,
+                    reversalIndex,
+                    reversalThetas.Count
                 );
             }
         }
-        else
+
+        lastStaircaseDeltaDeg = staircaseDeltaDeg;
+        currentTestThetaDeg = nextThetaDeg;
+
+        if (reversalThetas.Count >= targetReversalCount)
         {
-            if (eventLogger != null && maskingEventManager != null)
-            {
-                eventLogger.LogSearchEvent(
-                    "PHASE_CHANGE_COARSE_TO_FINE",
-                    maskingEventManager,
-                    phase.ToString(),
-                    currentTestThetaDeg,
-                    currentSafeThetaDeg
-                );
-            }
+            FinishStaircase("TARGET_REVERSALS_REACHED", true);
+            return;
+        }
 
-            phase = SearchPhase.Fine;
-            currentTestThetaDeg = currentSafeThetaDeg + fineStepDeg;
-
-            if (debugLog)
-            {
-                Debug.Log(
-                    $"[GainSearchFlowController] Coarse noticed -> switch to Fine. " +
-                    $"Safe={currentSafeThetaDeg}, Next Test={currentTestThetaDeg}",
-                    this
-                );
-            }
+        int effectiveMaxValidTrials = Mathf.Max(1, maxValidTrials);
+        if (validTrialCount >= effectiveMaxValidTrials)
+        {
+            FinishStaircase("MAX_VALID_TRIALS_REACHED", false);
         }
     }
 
-    private void HandleFineEvaluationFinished()
+    private void FinishStaircase(string reason, bool reliable)
     {
-        if (!noticedDuringCurrentEvaluation)
-        {
-            currentSafeThetaDeg = currentTestThetaDeg;
-            currentTestThetaDeg += fineStepDeg;
+        stopReason = reason;
+        thresholdReliable = reliable;
 
-            if (debugLog)
-            {
-                Debug.Log(
-                    $"[GainSearchFlowController] Fine accepted. " +
-                    $"New Safe={currentSafeThetaDeg}, Next Test={currentTestThetaDeg}",
-                    this
-                );
-            }
+        hasEstimatedThreshold = TryComputeEstimatedThreshold(out estimatedThresholdDeg);
+
+        if (!hasEstimatedThreshold)
+        {
+            estimatedThresholdDeg = 0f;
+            thresholdReliable = false;
         }
-        else
+
+        phase = SearchPhase.Finished;
+        evaluationPending = false;
+        evaluationInProgress = false;
+
+        if (eventLogger != null && maskingEventManager != null)
         {
-            if (eventLogger != null && maskingEventManager != null)
-            {
-                eventLogger.LogSearchEvent(
-                    "PHASE_CHANGE_FINE_TO_CONFIRM",
-                    maskingEventManager,
-                    phase.ToString(),
-                    currentTestThetaDeg,
-                    currentSafeThetaDeg
-                );
-            }
+            eventLogger.LogStaircaseResult(
+                "STAIRCASE_RESULT",
+                maskingEventManager,
+                estimatedThresholdDeg,
+                BuildUsedReversalsString(),
+                BuildAllReversalsString(),
+                validTrialCount,
+                reversalThetas.Count,
+                hasEstimatedThreshold && thresholdReliable,
+                stopReason,
+                $"thresholdReliable={thresholdReliable.ToString().ToLowerInvariant()};hasEstimatedThreshold={hasEstimatedThreshold.ToString().ToLowerInvariant()}"
+            );
+        }
 
-            phase = SearchPhase.Confirm;
-            currentTestThetaDeg = currentSafeThetaDeg;
-
-            if (debugLog)
-            {
-                Debug.Log(
-                    $"[GainSearchFlowController] Fine noticed -> switch to Confirm. " +
-                    $"Confirm Test={currentTestThetaDeg}",
-                    this
-                );
-            }
+        if (debugLog)
+        {
+            Debug.Log(
+                $"[GainSearchFlowController] Staircase finished. " +
+                $"Reason={stopReason}, HasThreshold={hasEstimatedThreshold}, Reliable={thresholdReliable}, " +
+                $"Threshold={estimatedThresholdDeg:F3}, ValidTrials={validTrialCount}, Reversals={reversalThetas.Count}",
+                this
+            );
         }
     }
 
-    private void HandleConfirmEvaluationFinished()
+    private bool TryComputeEstimatedThreshold(out float threshold)
     {
-        if (!noticedDuringCurrentEvaluation)
+        threshold = 0f;
+
+        int startIndex = Mathf.Clamp(ignoreFirstReversals, 0, reversalThetas.Count);
+        int usedCount = reversalThetas.Count - startIndex;
+        if (usedCount <= 0)
+            return false;
+
+        float sum = 0f;
+        for (int i = startIndex; i < reversalThetas.Count; i++)
+            sum += reversalThetas[i];
+
+        threshold = sum / usedCount;
+        return true;
+    }
+
+    private string BuildUsedReversalsString()
+    {
+        int startIndex = Mathf.Clamp(ignoreFirstReversals, 0, reversalThetas.Count);
+        return BuildReversalString(startIndex, reversalThetas.Count);
+    }
+
+    private string BuildAllReversalsString()
+    {
+        return BuildReversalString(0, reversalThetas.Count);
+    }
+
+    private string BuildReversalString(int startInclusive, int endExclusive)
+    {
+        if (reversalThetas.Count == 0 || startInclusive >= endExclusive)
+            return "";
+
+        StringBuilder builder = new StringBuilder();
+        for (int i = startInclusive; i < endExclusive; i++)
         {
-            confirmedUpperAcceptableThetaDeg = currentTestThetaDeg;
-            hasConfirmedUpperAcceptableTheta = true;
-
-            if (eventLogger != null && maskingEventManager != null)
-            {
-                eventLogger.LogSearchEvent(
-                    "CONFIRM_ACCEPTED",
-                    maskingEventManager,
-                    phase.ToString(),
-                    currentTestThetaDeg,
-                    currentSafeThetaDeg,
-                    $"confirmed={confirmedUpperAcceptableThetaDeg:F3}"
-                );
-            }
-
-            phase = SearchPhase.Finished;
-
-            if (debugLog)
-            {
-                Debug.Log(
-                    $"[GainSearchFlowController] Confirm accepted. " +
-                    $"Confirmed upper acceptable theta = {confirmedUpperAcceptableThetaDeg}",
-                    this
-                );
-            }
+            if (builder.Length > 0)
+                builder.Append(';');
+            builder.Append(FormatFloat(reversalThetas[i]));
         }
-        else
+
+        return builder.ToString();
+    }
+
+    private float GetConfiguredStartTheta()
+    {
+        float theta;
+        switch (startMode)
         {
-            confirmedUpperAcceptableThetaDeg = Mathf.Max(0f, currentTestThetaDeg - fineStepDeg);
-            hasConfirmedUpperAcceptableTheta = true;
-
-            currentSafeThetaDeg = confirmedUpperAcceptableThetaDeg;
-            currentTestThetaDeg = confirmedUpperAcceptableThetaDeg;
-
-            if (eventLogger != null && maskingEventManager != null)
-            {
-                eventLogger.LogSearchEvent(
-                    "CONFIRM_FALLBACK",
-                    maskingEventManager,
-                    phase.ToString(),
-                    currentTestThetaDeg,
-                    currentSafeThetaDeg,
-                    $"confirmed={confirmedUpperAcceptableThetaDeg:F3}"
-                );
-            }
-
-            phase = SearchPhase.Finished;
-
-            if (debugLog)
-            {
-                Debug.LogWarning(
-                    $"[GainSearchFlowController] Confirm noticed. Conservative fallback -> " +
-                    $"Confirmed upper acceptable theta = {confirmedUpperAcceptableThetaDeg}",
-                    this
-                );
-            }
+            case StaircaseStartMode.LowStart:
+                theta = lowStartThetaDeg;
+                break;
+            case StaircaseStartMode.Custom:
+                theta = customStartThetaDeg;
+                break;
+            case StaircaseStartMode.HighStart:
+            default:
+                theta = highStartThetaDeg;
+                break;
         }
+
+        return Mathf.Clamp(theta, minThetaDeg, maxThetaDeg);
     }
 
     private void ApplyCurrentTestThetaToInjection()
@@ -651,10 +723,8 @@ public class GainSearchFlowController : MonoBehaviour
         }
     }
 
-    private string BuildCurrentConditionName()
+    private static string FormatFloat(float value)
     {
-        return maskingEventManager != null
-            ? maskingEventManager.CurrentConditionName
-            : "Unknown";
+        return value.ToString("F3", CultureInfo.InvariantCulture);
     }
 }

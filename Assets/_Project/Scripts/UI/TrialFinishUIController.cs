@@ -71,7 +71,7 @@ public class TrialFinishUIController : MonoBehaviour
 
         if (!finished)
         {
-            resultText.text = "Confirmed Theta: -";
+            resultText.text = "Estimated Threshold: -";
             return;
         }
 
@@ -87,7 +87,7 @@ public class TrialFinishUIController : MonoBehaviour
         }
 
         resultText.text = theta >= 0f
-            ? $"Confirmed Theta: {theta:F1}°"
-            : "Confirmed Theta: -";
+            ? $"Estimated Threshold: {theta:F1}°"
+            : "Estimated Threshold: -";
     }
 }
