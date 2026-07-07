@@ -11478,6 +11478,10 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 1255986907}
     m_Modifications:
+    - target: {fileID: 4071440790880583340, guid: 01148c42dd08adc49ad7b51e91bafda3, type: 3}
+      propertyPath: _createPhysicsMeshes
+      value: 0
+      objectReference: {fileID: 0}
     - target: {fileID: 7637194240661786412, guid: 01148c42dd08adc49ad7b51e91bafda3, type: 3}
       propertyPath: m_LocalPosition.x
       value: 168.16974

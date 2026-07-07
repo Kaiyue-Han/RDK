@@ -122,7 +122,7 @@ public class MaskingEventManager : MonoBehaviour
 
     public void ConfigureTrial(TrialOccluderType occluderType, int ratio)
     {
-        AbortAndResetToIdle();
+        AbortAndResetToIdle("ConfigureTrial");
 
         currentOccluderType = occluderType;
         currentOcclusionRatio = ratio;
@@ -135,14 +135,14 @@ public class MaskingEventManager : MonoBehaviour
 
     public void StopTrial()
     {
-        AbortAndResetToIdle();
+        AbortAndResetToIdle("StopTrial");
         isTrialRunning = false;
         Debug.Log("[MaskingEventManager] Trial stopped.");
     }
 
     public void ClearTrial()
     {
-        AbortAndResetToIdle();
+        AbortAndResetToIdle("ClearTrial");
 
         isTrialConfigured = false;
         isTrialRunning = false;
@@ -157,7 +157,7 @@ public class MaskingEventManager : MonoBehaviour
         if (isOcclusionActive)
         {
             Debug.Log("[MaskingEventManager] Debug trigger pressed while occlusion is active. Restarting occlusion for position test.");
-            AbortAndResetToIdle();
+            AbortAndResetToIdle("DebugRestartOcclusion");
         }
 
         if (debugBypassTrialState)
@@ -217,7 +217,7 @@ public class MaskingEventManager : MonoBehaviour
         return true;
     }
 
-    public void AbortAndResetToIdle()
+    public void AbortAndResetToIdle(string resetReason = "AbortAndResetToIdle")
     {
         activeOccluder?.Hide();
         newspaperOccluder?.Hide();
@@ -231,9 +231,9 @@ public class MaskingEventManager : MonoBehaviour
         currentOcclusionDuration = 0f;
 
         logger?.LogResetEvent(
-            "ABORT_RESET",
+            "RESET_TO_IDLE",
             this,
-            "AbortAndResetToIdle"
+            resetReason
         );
     }
 
@@ -291,7 +291,7 @@ public class MaskingEventManager : MonoBehaviour
         injectFired = false;
 
         logger?.Mark(
-            "EVENT_END",
+            "OCCLUSION_END",
             this
         );
 

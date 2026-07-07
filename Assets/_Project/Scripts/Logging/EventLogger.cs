@@ -1,13 +1,12 @@
 using System;
 using System.Globalization;
 using System.IO;
-using System.Text;
 using UnityEngine;
 
 public class EventLogger : MonoBehaviour
 {
     private const string Header =
-        "utc,mark,conditionKey,conditionName,anchorMode,motionMode,occluderType,occlusionRatio,value,timeSec,success,phase,testThetaDeg,safeThetaDeg,noticed,validTrial,invalidReason,currentStepDeg,staircaseDeltaDeg,nextThetaDeg,isReversal,reversalIndex,reversalCount,estimatedThresholdDeg,usedReversals,allReversals,baseYawRateAtInjection,injectionSign,signedInjectedThetaDeg,injectionOutcome,resetReason,extra";
+        "utc,mark,conditionKey,anchorMode,motionMode,occluderName,occlusionRatio,timeSec,success,testThetaDeg,noticed,validTrial,invalidReason,currentStepDeg,staircaseDeltaDeg,nextThetaDeg,isReversal,reversalIndex,reversalCount,estimatedThresholdDeg,usedReversals,allReversals,baseYawRateAtInjection,injectionSign,signedInjectedThetaDeg,injectionOutcome,resetReason,extra";
 
     private string csvPath;
 
@@ -15,16 +14,12 @@ public class EventLogger : MonoBehaviour
     {
         public string mark;
         public string conditionKey;
-        public string conditionName;
         public string anchorMode;
         public string motionMode;
-        public string occluderType;
+        public string occluderName;
         public string occlusionRatio;
-        public string value;
         public string success;
-        public string phase;
         public string testThetaDeg;
-        public string safeThetaDeg;
         public string noticed;
         public string validTrial;
         public string invalidReason;
@@ -51,35 +46,35 @@ public class EventLogger : MonoBehaviour
         EnsureHeader();
     }
 
-    public void Mark(string mark, string conditionName, int ratio, float value = -1f)
+    // Compatibility overload for old call sites that only pass a condition string.
+    // The condition string is treated as conditionKey. New code should prefer the MaskingEventManager overload.
+    public void Mark(string mark, string conditionKey, int ratio, float value = -1f)
     {
         WriteRow(new LogRow
         {
             mark = mark,
-            conditionKey = conditionName,
-            conditionName = conditionName,
+            conditionKey = conditionKey,
             occlusionRatio = ratio.ToString(CultureInfo.InvariantCulture),
-            value = FormatFloat(value)
+            extra = value >= 0f ? $"legacyValue={FormatFloat(value)}" : ""
         });
     }
 
     public void Mark(string mark, MaskingEventManager maskingEventManager, float value = -1f, string extra = "")
     {
         LogRow row = CreateConditionRow(mark, maskingEventManager);
-        row.value = FormatFloat(value);
-        row.extra = extra;
+        row.extra = MergeExtra(extra, value >= 0f ? $"legacyValue={FormatFloat(value)}" : "");
         WriteRow(row);
     }
 
-    public void LogTrialResult(string conditionName, int ratio, float confirmedTheta, bool success)
+    // Compatibility overload. The old confirmed theta is written to estimatedThresholdDeg.
+    // After the staircase refactor, STAIRCASE_RESULT should become the main result mark.
+    public void LogTrialResult(string conditionKey, int ratio, float confirmedTheta, bool success)
     {
         WriteRow(new LogRow
         {
             mark = "TRIAL_RESULT",
-            conditionKey = conditionName,
-            conditionName = conditionName,
+            conditionKey = conditionKey,
             occlusionRatio = ratio.ToString(CultureInfo.InvariantCulture),
-            value = FormatFloat(confirmedTheta),
             success = BoolString(success),
             estimatedThresholdDeg = FormatFloat(confirmedTheta)
         });
@@ -88,15 +83,16 @@ public class EventLogger : MonoBehaviour
     public void LogTrialResult(MaskingEventManager maskingEventManager, float confirmedTheta, bool success)
     {
         LogRow row = CreateConditionRow("TRIAL_RESULT", maskingEventManager);
-        row.value = FormatFloat(confirmedTheta);
         row.success = BoolString(success);
         row.estimatedThresholdDeg = FormatFloat(confirmedTheta);
         WriteRow(row);
     }
 
+    // Compatibility overload for the old coarse/fine/confirm search.
+    // phase and safeTheta are intentionally not columns anymore.
     public void LogEvaluation(
         string mark,
-        string conditionName,
+        string conditionKey,
         int ratio,
         string phase,
         float testTheta,
@@ -107,13 +103,11 @@ public class EventLogger : MonoBehaviour
         WriteRow(new LogRow
         {
             mark = mark,
-            conditionKey = conditionName,
-            conditionName = conditionName,
+            conditionKey = conditionKey,
             occlusionRatio = ratio.ToString(CultureInfo.InvariantCulture),
-            phase = phase,
             testThetaDeg = FormatFloat(testTheta),
-            safeThetaDeg = FormatFloat(safeTheta),
-            noticed = BoolString(noticed)
+            noticed = BoolString(noticed),
+            extra = BuildLegacySearchExtra(phase, safeTheta)
         });
     }
 
@@ -130,19 +124,19 @@ public class EventLogger : MonoBehaviour
     )
     {
         LogRow row = CreateConditionRow(mark, maskingEventManager);
-        row.phase = phase;
         row.testThetaDeg = FormatFloat(testTheta);
-        row.safeThetaDeg = FormatFloat(safeTheta);
         row.noticed = BoolString(noticed);
         row.validTrial = validTrial.HasValue ? BoolString(validTrial.Value) : "";
         row.invalidReason = invalidReason;
-        row.extra = extra;
+        row.extra = MergeExtra(extra, BuildLegacySearchExtra(phase, safeTheta));
         WriteRow(row);
     }
 
+    // Compatibility overload for the old coarse/fine/confirm search.
+    // phase and safeTheta are kept only in extra until the staircase refactor removes old search events.
     public void LogSearchEvent(
         string mark,
-        string conditionName,
+        string conditionKey,
         int ratio,
         string phase,
         float testTheta,
@@ -153,13 +147,10 @@ public class EventLogger : MonoBehaviour
         WriteRow(new LogRow
         {
             mark = mark,
-            conditionKey = conditionName,
-            conditionName = conditionName,
+            conditionKey = conditionKey,
             occlusionRatio = ratio.ToString(CultureInfo.InvariantCulture),
-            phase = phase,
             testThetaDeg = FormatFloat(testTheta),
-            safeThetaDeg = FormatFloat(safeTheta),
-            extra = extra
+            extra = MergeExtra(extra, BuildLegacySearchExtra(phase, safeTheta))
         });
     }
 
@@ -173,10 +164,8 @@ public class EventLogger : MonoBehaviour
     )
     {
         LogRow row = CreateConditionRow(mark, maskingEventManager);
-        row.phase = phase;
         row.testThetaDeg = FormatFloat(testTheta);
-        row.safeThetaDeg = FormatFloat(safeTheta);
-        row.extra = extra;
+        row.extra = MergeExtra(extra, BuildLegacySearchExtra(phase, safeTheta));
         WriteRow(row);
     }
 
@@ -193,14 +182,12 @@ public class EventLogger : MonoBehaviour
     )
     {
         LogRow row = CreateConditionRow(mark, maskingEventManager);
-        row.phase = phase;
         row.testThetaDeg = FormatFloat(testTheta);
-        row.safeThetaDeg = FormatFloat(safeTheta);
         row.noticed = BoolString(noticed);
         row.validTrial = BoolString(false);
         row.invalidReason = invalidReason;
         row.injectionOutcome = injectionOutcome;
-        row.extra = extra;
+        row.extra = MergeExtra(extra, BuildLegacySearchExtra(phase, safeTheta));
         WriteRow(row);
     }
 
@@ -215,11 +202,11 @@ public class EventLogger : MonoBehaviour
     )
     {
         LogRow row = CreateConditionRow(mark, maskingEventManager);
-        row.value = FormatFloat(value);
         row.baseYawRateAtInjection = FormatFloat(baseYawRateAtInjection);
         row.injectionSign = FormatFloat(injectionSign);
         row.signedInjectedThetaDeg = FormatFloat(signedInjectedThetaDeg);
         row.injectionOutcome = injectionOutcome;
+        row.extra = value != signedInjectedThetaDeg ? $"legacyValue={FormatFloat(value)}" : "";
         WriteRow(row);
     }
 
@@ -254,7 +241,6 @@ public class EventLogger : MonoBehaviour
     )
     {
         LogRow row = CreateConditionRow(mark, maskingEventManager);
-        row.phase = phase;
         row.testThetaDeg = FormatFloat(testThetaDeg);
         row.noticed = BoolString(noticed);
         row.validTrial = BoolString(validTrial);
@@ -265,7 +251,7 @@ public class EventLogger : MonoBehaviour
         row.isReversal = BoolString(isReversal);
         row.reversalIndex = reversalIndex > 0 ? reversalIndex.ToString(CultureInfo.InvariantCulture) : "";
         row.reversalCount = reversalCount.ToString(CultureInfo.InvariantCulture);
-        row.extra = extra;
+        row.extra = MergeExtra(extra, string.IsNullOrEmpty(phase) ? "" : $"legacyPhase={phase}");
         WriteRow(row);
     }
 
@@ -283,14 +269,13 @@ public class EventLogger : MonoBehaviour
     )
     {
         LogRow row = CreateConditionRow(mark, maskingEventManager);
-        row.value = FormatFloat(estimatedThresholdDeg);
         row.success = BoolString(success);
         row.validTrial = BoolString(true);
         row.estimatedThresholdDeg = FormatFloat(estimatedThresholdDeg);
         row.usedReversals = usedReversals;
         row.allReversals = allReversals;
         row.reversalCount = reversalCount.ToString(CultureInfo.InvariantCulture);
-        row.extra = $"validTrialCount={validTrialCount};stopReason={stopReason}" + (string.IsNullOrEmpty(extra) ? "" : $";{extra}");
+        row.extra = MergeExtra(extra, $"validTrialCount={validTrialCount};stopReason={stopReason}");
         WriteRow(row);
     }
 
@@ -301,16 +286,14 @@ public class EventLogger : MonoBehaviour
         if (maskingEventManager == null)
         {
             row.conditionKey = "Unknown";
-            row.conditionName = "Unknown";
             row.occlusionRatio = "";
             return row;
         }
 
         row.conditionKey = maskingEventManager.CurrentConditionKey;
-        row.conditionName = maskingEventManager.CurrentConditionName;
         row.anchorMode = maskingEventManager.CurrentAnchorModeName;
         row.motionMode = maskingEventManager.CurrentMotionModeName;
-        row.occluderType = maskingEventManager.CurrentVisualName;
+        row.occluderName = maskingEventManager.CurrentVisualName;
         row.occlusionRatio = maskingEventManager.CurrentOcclusionRatio.ToString(CultureInfo.InvariantCulture);
         return row;
     }
@@ -327,17 +310,13 @@ public class EventLogger : MonoBehaviour
             utc,
             row.mark,
             row.conditionKey,
-            row.conditionName,
             row.anchorMode,
             row.motionMode,
-            row.occluderType,
+            row.occluderName,
             row.occlusionRatio,
-            row.value,
             timeSec,
             row.success,
-            row.phase,
             row.testThetaDeg,
-            row.safeThetaDeg,
             row.noticed,
             row.validTrial,
             row.invalidReason,
@@ -398,7 +377,7 @@ public class EventLogger : MonoBehaviour
         }
         catch (Exception ex)
         {
-            Debug.LogWarning($"[EventLogger] Could not rotate old events.csv header: {ex.Message}. New rows may not match the old header.");
+            Debug.LogWarning($"[EventLogger] Could not rotate old events.csv header: {ex.Message}. New rows may not match the current header.");
         }
     }
 
@@ -432,5 +411,27 @@ public class EventLogger : MonoBehaviour
     private static string BoolString(bool value)
     {
         return value ? "true" : "false";
+    }
+
+    private static string BuildLegacySearchExtra(string phase, float safeTheta)
+    {
+        string extra = "";
+
+        if (!string.IsNullOrEmpty(phase))
+            extra = MergeExtra(extra, $"legacyPhase={phase}");
+
+        if (!float.IsNaN(safeTheta))
+            extra = MergeExtra(extra, $"legacySafeThetaDeg={FormatFloat(safeTheta)}");
+
+        return extra;
+    }
+
+    private static string MergeExtra(string a, string b)
+    {
+        if (string.IsNullOrEmpty(a))
+            return b ?? "";
+        if (string.IsNullOrEmpty(b))
+            return a ?? "";
+        return $"{a};{b}";
     }
 }

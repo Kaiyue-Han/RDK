@@ -237,14 +237,6 @@ public class GainSearchFlowController : MonoBehaviour
                 currentSafeThetaDeg,
                 false
             );
-
-            eventLogger.LogSearchEvent(
-                "EVAL_TRIGGERED",
-                maskingEventManager,
-                phase.ToString(),
-                currentTestThetaDeg,
-                currentSafeThetaDeg
-            );
         }
 
         if (debugLog)
@@ -310,15 +302,6 @@ public class GainSearchFlowController : MonoBehaviour
                     noticedBeforeFinish,
                     "NO_INJECTION_STARTED",
                     outcome
-                );
-
-                eventLogger.LogSearchEvent(
-                    "EVAL_RETRY_NO_INJECTION",
-                    maskingEventManager,
-                    phaseBeforeFinish,
-                    testThetaBeforeFinish,
-                    safeThetaBeforeFinish,
-                    $"outcome={outcome}"
                 );
             }
 

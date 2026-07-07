@@ -283,14 +283,6 @@ public class ExperimentTrialController : MonoBehaviour
 
         trialPaused = true;
 
-        if (eventLogger != null && maskingEventManager != null)
-        {
-            eventLogger.Mark(
-                "TRIAL_PAUSE",
-                maskingEventManager
-            );
-        }
-
         if (debugLog)
         {
             Debug.Log(
@@ -318,14 +310,6 @@ public class ExperimentTrialController : MonoBehaviour
 
         trialPaused = false;
         trialRunning = true;
-
-        if (eventLogger != null && maskingEventManager != null)
-        {
-            eventLogger.Mark(
-                "TRIAL_RESUME",
-                maskingEventManager
-            );
-        }
 
         if (debugLog)
         {
