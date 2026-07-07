@@ -170,8 +170,7 @@ public class GainSearchFlowController : MonoBehaviour
         {
             eventLogger.LogSearchEvent(
                 "SEARCH_START",
-                BuildCurrentConditionName(),
-                maskingEventManager.CurrentOcclusionRatio,
+                maskingEventManager,
                 phase.ToString(),
                 currentTestThetaDeg,
                 currentSafeThetaDeg
@@ -232,8 +231,7 @@ public class GainSearchFlowController : MonoBehaviour
         {
             eventLogger.LogEvaluation(
                 "EVAL_START",
-                BuildCurrentConditionName(),
-                maskingEventManager.CurrentOcclusionRatio,
+                maskingEventManager,
                 phase.ToString(),
                 currentTestThetaDeg,
                 currentSafeThetaDeg,
@@ -242,8 +240,7 @@ public class GainSearchFlowController : MonoBehaviour
 
             eventLogger.LogSearchEvent(
                 "EVAL_TRIGGERED",
-                BuildCurrentConditionName(),
-                maskingEventManager.CurrentOcclusionRatio,
+                maskingEventManager,
                 phase.ToString(),
                 currentTestThetaDeg,
                 currentSafeThetaDeg
@@ -300,24 +297,24 @@ public class GainSearchFlowController : MonoBehaviour
         {
             if (eventLogger != null && maskingEventManager != null)
             {
-                eventLogger.LogEvaluation(
-                    "EVAL_FINISH_INVALID_NO_INJECTION",
-                    BuildCurrentConditionName(),
-                    maskingEventManager.CurrentOcclusionRatio,
-                    phaseBeforeFinish,
-                    testThetaBeforeFinish,
-                    safeThetaBeforeFinish,
-                    noticedBeforeFinish
-                );
-
                 string outcome = injectionController != null
                     ? injectionController.CurrentEvaluationInjectionOutcome
                     : "NO_INJECTION_CONTROLLER";
 
+                eventLogger.LogInvalidEvaluation(
+                    "EVAL_FINISH_INVALID_NO_INJECTION",
+                    maskingEventManager,
+                    phaseBeforeFinish,
+                    testThetaBeforeFinish,
+                    safeThetaBeforeFinish,
+                    noticedBeforeFinish,
+                    "NO_INJECTION_STARTED",
+                    outcome
+                );
+
                 eventLogger.LogSearchEvent(
                     "EVAL_RETRY_NO_INJECTION",
-                    BuildCurrentConditionName(),
-                    maskingEventManager.CurrentOcclusionRatio,
+                    maskingEventManager,
                     phaseBeforeFinish,
                     testThetaBeforeFinish,
                     safeThetaBeforeFinish,
@@ -370,12 +367,12 @@ public class GainSearchFlowController : MonoBehaviour
         {
             eventLogger.LogEvaluation(
                 "EVAL_FINISH",
-                BuildCurrentConditionName(),
-                maskingEventManager.CurrentOcclusionRatio,
+                maskingEventManager,
                 phaseBeforeFinish,
                 testThetaBeforeFinish,
                 safeThetaBeforeFinish,
-                noticedBeforeFinish
+                noticedBeforeFinish,
+                true
             );
         }
 
@@ -412,8 +409,7 @@ public class GainSearchFlowController : MonoBehaviour
         {
             eventLogger.LogSearchEvent(
                 "SEARCH_STOP",
-                BuildCurrentConditionName(),
-                maskingEventManager.CurrentOcclusionRatio,
+                maskingEventManager,
                 phase.ToString(),
                 currentTestThetaDeg,
                 currentSafeThetaDeg
@@ -446,8 +442,7 @@ public class GainSearchFlowController : MonoBehaviour
         {
             eventLogger.LogSearchEvent(
                 "SEARCH_RESET",
-                BuildCurrentConditionName(),
-                maskingEventManager.CurrentOcclusionRatio,
+                maskingEventManager,
                 phase.ToString(),
                 currentTestThetaDeg,
                 currentSafeThetaDeg
@@ -530,8 +525,7 @@ public class GainSearchFlowController : MonoBehaviour
             {
                 eventLogger.LogSearchEvent(
                     "PHASE_CHANGE_COARSE_TO_FINE",
-                    BuildCurrentConditionName(),
-                    maskingEventManager.CurrentOcclusionRatio,
+                    maskingEventManager,
                     phase.ToString(),
                     currentTestThetaDeg,
                     currentSafeThetaDeg
@@ -574,8 +568,7 @@ public class GainSearchFlowController : MonoBehaviour
             {
                 eventLogger.LogSearchEvent(
                     "PHASE_CHANGE_FINE_TO_CONFIRM",
-                    BuildCurrentConditionName(),
-                    maskingEventManager.CurrentOcclusionRatio,
+                    maskingEventManager,
                     phase.ToString(),
                     currentTestThetaDeg,
                     currentSafeThetaDeg
@@ -607,8 +600,7 @@ public class GainSearchFlowController : MonoBehaviour
             {
                 eventLogger.LogSearchEvent(
                     "CONFIRM_ACCEPTED",
-                    BuildCurrentConditionName(),
-                    maskingEventManager.CurrentOcclusionRatio,
+                    maskingEventManager,
                     phase.ToString(),
                     currentTestThetaDeg,
                     currentSafeThetaDeg,
@@ -639,8 +631,7 @@ public class GainSearchFlowController : MonoBehaviour
             {
                 eventLogger.LogSearchEvent(
                     "CONFIRM_FALLBACK",
-                    BuildCurrentConditionName(),
-                    maskingEventManager.CurrentOcclusionRatio,
+                    maskingEventManager,
                     phase.ToString(),
                     currentTestThetaDeg,
                     currentSafeThetaDeg,
@@ -679,13 +670,8 @@ public class GainSearchFlowController : MonoBehaviour
 
     private string BuildCurrentConditionName()
     {
-        if (maskingEventManager == null)
-            return "Unknown";
-
-        string typeName = (maskingEventManager.CurrentOccluderType == MaskingEventManager.TrialOccluderType.Newspaper)
-            ? "Newspaper"
-            : "Pigeon";
-
-        return $"{typeName}{maskingEventManager.CurrentOcclusionRatio}";
+        return maskingEventManager != null
+            ? maskingEventManager.CurrentConditionName
+            : "Unknown";
     }
 }

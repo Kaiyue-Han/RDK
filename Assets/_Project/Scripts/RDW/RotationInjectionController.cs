@@ -44,6 +44,9 @@ public class RotationInjectionController : MonoBehaviour
     // Only an evaluation that reaches INJECTION_START should be allowed to update theta.
     public bool CurrentEvaluationInjectionStarted { get; private set; } = false;
     public string CurrentEvaluationInjectionOutcome { get; private set; } = "NONE";
+    public float CachedBaseYawRate => cachedBaseYawRate;
+    public float LastSignedThetaDeg => signedTheta;
+    public float LastInjectionSign => Mathf.Abs(signedTheta) > 0.0001f ? Mathf.Sign(signedTheta) : 0f;
 
     void Awake()
     {
@@ -283,18 +286,16 @@ public class RotationInjectionController : MonoBehaviour
         if (eventLogger == null || maskingEventManager == null)
             return;
 
-        string typeName =
-            (maskingEventManager.CurrentOccluderType == MaskingEventManager.TrialOccluderType.Newspaper)
-            ? "Newspaper"
-            : "Pigeon";
+        float injectionSign = Mathf.Abs(value) > 0.0001f ? Mathf.Sign(value) : 0f;
 
-        string conditionName = $"{typeName}{maskingEventManager.CurrentOcclusionRatio}";
-
-        eventLogger.Mark(
+        eventLogger.LogInjectionEvent(
             mark,
-            conditionName,
-            maskingEventManager.CurrentOcclusionRatio,
-            value
+            maskingEventManager,
+            value,
+            cachedBaseYawRate,
+            injectionSign,
+            value,
+            CurrentEvaluationInjectionOutcome
         );
     }
 }

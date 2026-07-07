@@ -183,10 +183,7 @@ public class ExperimentTrialController : MonoBehaviour
         finalConfirmedThetaDeg = 0f;
         finalSuccess = false;
 
-        currentConditionName = BuildConditionName(
-            maskingEventManager.CurrentOccluderType,
-            maskingEventManager.CurrentOcclusionRatio
-        );
+        currentConditionName = maskingEventManager.CurrentConditionName;
 
         if (debugLog)
         {
@@ -202,8 +199,7 @@ public class ExperimentTrialController : MonoBehaviour
         {
             eventLogger.Mark(
                 "TRIAL_START",
-                currentConditionName,
-                maskingEventManager.CurrentOcclusionRatio
+                maskingEventManager
             );
         }
 
@@ -236,8 +232,9 @@ public class ExperimentTrialController : MonoBehaviour
         {
             eventLogger.Mark(
                 "TRIAL_ABORT",
-                currentConditionName,
-                maskingEventManager.CurrentOcclusionRatio
+                maskingEventManager,
+                -1f,
+                "abortReason=AbortCurrentTrial"
             );
         }
 
@@ -290,8 +287,7 @@ public class ExperimentTrialController : MonoBehaviour
         {
             eventLogger.Mark(
                 "TRIAL_PAUSE",
-                currentConditionName,
-                maskingEventManager.CurrentOcclusionRatio
+                maskingEventManager
             );
         }
 
@@ -327,8 +323,7 @@ public class ExperimentTrialController : MonoBehaviour
         {
             eventLogger.Mark(
                 "TRIAL_RESUME",
-                currentConditionName,
-                maskingEventManager.CurrentOcclusionRatio
+                maskingEventManager
             );
         }
 
@@ -394,13 +389,11 @@ public class ExperimentTrialController : MonoBehaviour
         {
             eventLogger.Mark(
                 "TRIAL_FINISH",
-                currentConditionName,
-                maskingEventManager.CurrentOcclusionRatio
+                maskingEventManager
             );
 
             eventLogger.LogTrialResult(
-                currentConditionName,
-                maskingEventManager.CurrentOcclusionRatio,
+                maskingEventManager,
                 finalConfirmedThetaDeg,
                 finalSuccess
             );
@@ -414,12 +407,4 @@ public class ExperimentTrialController : MonoBehaviour
         }
     }
 
-    private string BuildConditionName(MaskingEventManager.TrialOccluderType type, int ratio)
-    {
-        string typeName = (type == MaskingEventManager.TrialOccluderType.Newspaper)
-            ? "Newspaper"
-            : "Pigeon";
-
-        return $"{typeName}{ratio}";
-    }
 }

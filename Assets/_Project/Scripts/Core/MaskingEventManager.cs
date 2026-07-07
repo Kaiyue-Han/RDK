@@ -72,6 +72,11 @@ public class MaskingEventManager : MonoBehaviour
 
     public TrialOccluderType CurrentOccluderType => currentOccluderType;
     public int CurrentOcclusionRatio => currentOcclusionRatio;
+    public string CurrentAnchorModeName => IsWorldFixedOccluder(currentOccluderType) ? "WorldFixed" : "FollowHMD";
+    public string CurrentMotionModeName => IsStaticOccluder(currentOccluderType) ? "Static" : "Dynamic";
+    public string CurrentVisualName => GetVisualName(currentOccluderType);
+    public string CurrentConditionKey => $"{CurrentAnchorModeName}_{CurrentMotionModeName}_{currentOcclusionRatio}";
+    public string CurrentConditionName => BuildCurrentConditionName();
 
     private IOccluder newspaperOccluder;
     private IOccluder pigeonOccluder;
@@ -203,8 +208,7 @@ public class MaskingEventManager : MonoBehaviour
 
         logger?.Mark(
             "OCCLUSION_START",
-            BuildCurrentConditionName(),
-            currentOcclusionRatio
+            this
         );
 
         activeOccluder.Show(currentOcclusionRatio, currentOcclusionDuration);
@@ -226,10 +230,10 @@ public class MaskingEventManager : MonoBehaviour
         injectFired = false;
         currentOcclusionDuration = 0f;
 
-        logger?.Mark(
+        logger?.LogResetEvent(
             "ABORT_RESET",
-            BuildCurrentConditionName(),
-            currentOcclusionRatio
+            this,
+            "AbortAndResetToIdle"
         );
     }
 
@@ -266,8 +270,7 @@ public class MaskingEventManager : MonoBehaviour
 
             logger?.Mark(
                 "INJECT_POINT",
-                BuildCurrentConditionName(),
-                currentOcclusionRatio
+                this
             );
 
             OnInjectPoint?.Invoke();
@@ -289,8 +292,7 @@ public class MaskingEventManager : MonoBehaviour
 
         logger?.Mark(
             "EVENT_END",
-            BuildCurrentConditionName(),
-            currentOcclusionRatio
+            this
         );
 
         Debug.Log("[MaskingEventManager] Occlusion ended.");
@@ -346,13 +348,9 @@ public class MaskingEventManager : MonoBehaviour
         return type == TrialOccluderType.Newspaper || type == TrialOccluderType.Sign;
     }
 
-    private string BuildCurrentConditionName()
+    public string BuildCurrentConditionName()
     {
-        string motionName = IsStaticOccluder(currentOccluderType) ? "Static" : "Dynamic";
-        string anchorName = IsWorldFixedOccluder(currentOccluderType) ? "WorldFixed" : "FollowHMD";
-        string visualName = GetVisualName(currentOccluderType);
-
-        return $"{motionName}_{currentOcclusionRatio}_{anchorName}_{visualName}";
+        return $"{CurrentConditionKey}_{CurrentVisualName}";
     }
 
     private bool IsWorldFixedOccluder(TrialOccluderType type)
@@ -365,7 +363,7 @@ public class MaskingEventManager : MonoBehaviour
         switch (type)
         {
             case TrialOccluderType.Newspaper:
-                return "Paper";
+                return "Newspaper";
             case TrialOccluderType.Pigeon:
                 return "Pigeon";
             case TrialOccluderType.Sign:
