@@ -24,14 +24,14 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1550233100030879758}
   serializedVersion: 2
-  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalRotation: {x: 0, y: 1, z: 0, w: 0}
   m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 6169280036040928579}
   m_Father: {fileID: 8532709082567899318}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 180, z: 0}
 --- !u!1 &2787645398943661347
 GameObject:
   m_ObjectHideFlags: 0
@@ -45,6 +45,7 @@ GameObject:
   - component: {fileID: 9073444319624326730}
   - component: {fileID: 3265684803189712898}
   - component: {fileID: 2537989518050965598}
+  - component: {fileID: 2508599452102800794}
   m_Layer: 0
   m_Name: Coin
   m_TagString: Player
@@ -142,6 +143,24 @@ Rigidbody:
   m_Interpolate: 0
   m_Constraints: 0
   m_CollisionDetection: 0
+--- !u!114 &2508599452102800794
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2787645398943661347}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5a88fb2b64caf99458b8a3956ffa9761, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::CoinPulseVisual
+  targetRenderer: {fileID: 5032354069092439596}
+  inactiveColor: {r: 0.75, g: 0.65, b: 0.35, a: 1}
+  activeColor: {r: 1, g: 0.78, b: 0.2, a: 1}
+  pulseSpeed: 2
+  minIntensity: 1
+  maxIntensity: 2
 --- !u!1001 &5915221910695545512
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -206,6 +225,14 @@ PrefabInstance:
       propertyPath: m_ConstrainProportionsScale
       value: 0
       objectReference: {fileID: 0}
+    - target: {fileID: -7511558181221131132, guid: 800069af34181a54ab93a4971ea725e6, type: 3}
+      propertyPath: 'm_Materials.Array.data[0]'
+      value: 
+      objectReference: {fileID: 2100000, guid: 6646340051cd34b4d9907a1d36d16d70, type: 2}
+    - target: {fileID: -7511558181221131132, guid: 800069af34181a54ab93a4971ea725e6, type: 3}
+      propertyPath: 'm_Materials.Array.data[1]'
+      value: 
+      objectReference: {fileID: 2100000, guid: 25c3b54ad2f977c4ca67823a846decb4, type: 2}
     - target: {fileID: 919132149155446097, guid: 800069af34181a54ab93a4971ea725e6, type: 3}
       propertyPath: m_Name
       value: CoinMesh
@@ -215,6 +242,11 @@ PrefabInstance:
     m_AddedGameObjects: []
     m_AddedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: 800069af34181a54ab93a4971ea725e6, type: 3}
+--- !u!23 &5032354069092439596 stripped
+MeshRenderer:
+  m_CorrespondingSourceObject: {fileID: -7511558181221131132, guid: 800069af34181a54ab93a4971ea725e6, type: 3}
+  m_PrefabInstance: {fileID: 5915221910695545512}
+  m_PrefabAsset: {fileID: 0}
 --- !u!4 &6169280036040928579 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: -8679921383154817045, guid: 800069af34181a54ab93a4971ea725e6, type: 3}

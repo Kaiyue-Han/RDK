@@ -7,8 +7,8 @@ public class PlayAreaRectProvider : MonoBehaviour
     public PhysicalPositionTracker physicalTracker;
 
     [Header("Rect Play Area (meters)")]
-    public float width = 3f;
-    public float depth = 3f;
+    public float width = 7f;
+    public float depth = 7f;
     public bool lockCenterAtStart = true;
 
     [Header("Debug")]

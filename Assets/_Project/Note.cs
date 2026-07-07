@@ -1,16 +1,13 @@
-using UnityEngine;
+//1.右手A键控制触发交互
+//2.左手侧键控制UI界面呼出与关闭
+//3.右手侧键标记感知角度
 
-public class Note : MonoBehaviour
-{
-    // Start is called once before the first execution of Update after the MonoBehaviour is created
-    void Start()
-    {
-        
-    }
+//待办
+//1.检查Oculus的logger导出是否正确
+//2.增加Bamberg场景
+//3.静态遮挡物调整
+//3.1.有必要时可做对照实验
+//4.找人员测试
+//5.更改实验流程,根据论文
+//6.增加金币动画效果,金币只出现5个,每吃掉一个出现一个,当前金币为高光显示
 
-    // Update is called once per frame
-    void Update()
-    {
-        
-    }
-}

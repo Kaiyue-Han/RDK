@@ -36,7 +36,17 @@ public class XRButtonInput : MonoBehaviour, IButtonInput
         bool pressedThisFrame = down && !_prevDown;
         _prevDown = down;
 
+        if (pressedThisFrame)
+        {
+            Debug.Log("[XRButtonInput] PressedThisFrame detected.", this);
+        }
+
         return pressedThisFrame;
+    }
+
+    public bool IsPressedNow()
+    {
+        return IsDownNow();
     }
 
     private bool IsDownNow()

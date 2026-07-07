@@ -3,17 +3,19 @@ using UnityEngine.UI;
 
 public class ExperimentUIController : MonoBehaviour
 {
-    public enum PlayAreaSize { Size3x3, Size6x6 }
+    public enum AnchorMode { FollowHMD, WorldFixed }
     public enum OccluderType { Static, Dynamic }
     public enum OcclusionSize { Small, Large }
 
-    [Header("UI Toggles")]
-    [SerializeField] private Toggle space3x3;
-    [SerializeField] private Toggle space6x6;
+    [Header("Anchor Mode Toggles")]
+    [SerializeField] private Toggle anchorFollowHmd;
+    [SerializeField] private Toggle anchorWorldFixed;
 
+    [Header("Occluder Type Toggles")]
     [SerializeField] private Toggle typeStatic;
     [SerializeField] private Toggle typeDynamic;
 
+    [Header("Occlusion Size Toggles")]
     [SerializeField] private Toggle sizeSmall;
     [SerializeField] private Toggle sizeLarge;
 
@@ -22,12 +24,7 @@ public class ExperimentUIController : MonoBehaviour
 
     [Header("Core References")]
     [SerializeField] private MaskingEventManager maskingEventManager;
-
-    [Tooltip("Drag the component that implements IOccluder for Static condition (e.g., UIOccluder).")]
-    [SerializeField] private MonoBehaviour staticOccluderBehaviour;
-
-    [Tooltip("Drag the component that implements IOccluder for Dynamic condition (e.g., UmbrellaOccluder).")]
-    [SerializeField] private MonoBehaviour DynamicOccluderBehaviour;
+    [SerializeField] private ExperimentTrialController experimentTrialController;
 
     [Header("Mapping (match paper)")]
     [SerializeField] private int smallOcclusionRatio = 40;
@@ -43,23 +40,33 @@ public class ExperimentUIController : MonoBehaviour
     [Tooltip("Hide panel after Apply(). Recommended for participant mode.")]
     [SerializeField] private bool closePanelAfterApply = true;
 
-    [Tooltip("Lock UI interactions after Apply() (toggles/buttons become non-interactable).")]
+    [Tooltip("If true, UI options are locked after Apply(). If false, they stay editable even after the trial controller starts.")]
     [SerializeField] private bool lockUIAfterApply = false;
 
     private void Awake()
     {
         if (applyButton) applyButton.onClick.AddListener(Apply);
 
-        // 保底：确保每组一定是二选一（即使你没配 ToggleGroup）
-        BindMutualExclusive(space3x3, space6x6);
+        BindMutualExclusive(anchorFollowHmd, anchorWorldFixed);
         BindMutualExclusive(typeStatic, typeDynamic);
         BindMutualExclusive(sizeSmall, sizeLarge);
+    }
+
+    private void OnEnable()
+    {
+        // Important: ExperimentTrialController may lock this UI when a trial starts.
+        // If the user chose not to lock after Apply, re-opening the panel should make it editable again.
+        if (!lockUIAfterApply)
+            SetUIInteractable(true);
     }
 
     private void Start()
     {
         EnsureDefaults();
-        if (applyOnStart) Apply();
+        SetUIInteractable(!lockUIAfterApply || !applyOnStart);
+
+        if (applyOnStart)
+            Apply();
     }
 
     private void BindMutualExclusive(Toggle a, Toggle b)
@@ -71,36 +78,34 @@ public class ExperimentUIController : MonoBehaviour
 
     private void EnsureDefaults()
     {
-        // Space Size
-        if (space3x3 && space6x6)
+        if (anchorFollowHmd && anchorWorldFixed)
         {
-            if (space3x3.isOn == space6x6.isOn) // 两个都开 或 两个都关
+            if (anchorFollowHmd.isOn == anchorWorldFixed.isOn)
             {
-                space3x3.isOn = false;
-                space6x6.isOn = true; // 默认 6x6
+                anchorWorldFixed.isOn = false;
+                anchorFollowHmd.isOn = true; // default: old behavior
             }
         }
 
-        // Occluder Type
         if (typeStatic && typeDynamic)
         {
             if (typeStatic.isOn == typeDynamic.isOn)
             {
                 typeDynamic.isOn = false;
-                typeStatic.isOn = true; // 默认 Static
+                typeStatic.isOn = true; // default: static
             }
         }
 
-        // Occlusion Size
         if (sizeSmall && sizeLarge)
         {
             if (sizeSmall.isOn == sizeLarge.isOn)
             {
                 sizeLarge.isOn = false;
-                sizeSmall.isOn = true; // 默认 Small
+                sizeSmall.isOn = true; // default 40
             }
         }
     }
+
     public void Apply()
     {
         if (!maskingEventManager)
@@ -109,48 +114,35 @@ public class ExperimentUIController : MonoBehaviour
             return;
         }
 
-        // 0) Clean boundary: Apply should happen at a "trial boundary"
-        maskingEventManager.AbortAndResetToIdle();
+        EnsureDefaults();
 
-        var type = ReadOccluderType();
-        var occSize = ReadOcclusionSize();
-        var area = ReadPlayArea(); // 目前不接 coin manager，但保留
+        AnchorMode anchor = ReadAnchorMode();
+        OccluderType type = ReadOccluderType();
+        OcclusionSize occSize = ReadOcclusionSize();
         int ratio = (occSize == OcclusionSize.Small) ? smallOcclusionRatio : largeOcclusionRatio;
 
-        // 1) ratio
-        maskingEventManager.SetOcclusionRatio(ratio);
+        MaskingEventManager.TrialOccluderType trialType = ConvertToTrialOccluder(anchor, type);
 
-        // 2) occluder type (swap behaviour + rebind IOccluder)
-        MonoBehaviour chosenOccluder = (type == OccluderType.Static) ? staticOccluderBehaviour : DynamicOccluderBehaviour;
-        if (!chosenOccluder)
-        {
-            Debug.LogError($"[ExperimentUI] OccluderBehaviour for {type} not assigned.");
-            return;
-        }
+        maskingEventManager.ConfigureTrial(trialType, ratio);
 
-        if (!(chosenOccluder is IOccluder))
-        {
-            Debug.LogError($"[ExperimentUI] {chosenOccluder.name} does NOT implement IOccluder.");
-            return;
-        }
+        Debug.Log($"[ExperimentUI] Apply: Anchor={anchor}, Type={type}, Ratio={ratio}, TrialOccluder={trialType}, LockUIAfterApply={lockUIAfterApply}");
 
-        maskingEventManager.SetOccluderBehaviour(chosenOccluder);
+        if (experimentTrialController != null)
+            experimentTrialController.StartCurrentConfiguredTrial();
 
-        Debug.Log($"[ExperimentUI] Apply: Area={area}, Type={type}, Ratio={ratio}");
+        // This line is the actual fix:
+        // ExperimentTrialController.StartCurrentConfiguredTrial() may force-lock the UI.
+        // We apply the user's chosen setting AFTER that call so the Inspector option really works.
+        SetUIInteractable(!lockUIAfterApply);
 
-        // 3) Optional: lock UI (prevent accidental changes during trial)
-        if (lockUIAfterApply)
-            SetUIInteractable(false);
-
-        // 4) Optional: close panel after apply (recommended for participant mode)
         if (closePanelAfterApply && panelRoot)
             panelRoot.SetActive(false);
     }
 
     public void SetUIInteractable(bool interactable)
     {
-        if (space3x3) space3x3.interactable = interactable;
-        if (space6x6) space6x6.interactable = interactable;
+        if (anchorFollowHmd) anchorFollowHmd.interactable = interactable;
+        if (anchorWorldFixed) anchorWorldFixed.interactable = interactable;
 
         if (typeStatic) typeStatic.interactable = interactable;
         if (typeDynamic) typeDynamic.interactable = interactable;
@@ -159,6 +151,26 @@ public class ExperimentUIController : MonoBehaviour
         if (sizeLarge) sizeLarge.interactable = interactable;
 
         if (applyButton) applyButton.interactable = interactable;
+    }
+
+    [ContextMenu("DEBUG Unlock UI")]
+    public void DebugUnlockUI()
+    {
+        SetUIInteractable(true);
+        Debug.Log("[ExperimentUI] DEBUG Unlock UI.");
+    }
+
+    [ContextMenu("DEBUG Lock UI")]
+    public void DebugLockUI()
+    {
+        SetUIInteractable(false);
+        Debug.Log("[ExperimentUI] DEBUG Lock UI.");
+    }
+
+    private AnchorMode ReadAnchorMode()
+    {
+        if (anchorWorldFixed && anchorWorldFixed.isOn) return AnchorMode.WorldFixed;
+        return AnchorMode.FollowHMD;
     }
 
     private OccluderType ReadOccluderType()
@@ -173,9 +185,23 @@ public class ExperimentUIController : MonoBehaviour
         return OcclusionSize.Small;
     }
 
-    private PlayAreaSize ReadPlayArea()
+    private MaskingEventManager.TrialOccluderType ConvertToTrialOccluder(AnchorMode anchor, OccluderType type)
     {
-        if (space3x3 && space3x3.isOn) return PlayAreaSize.Size3x3;
-        return PlayAreaSize.Size6x6;
+        if (anchor == AnchorMode.FollowHMD)
+        {
+            return type == OccluderType.Static
+                ? MaskingEventManager.TrialOccluderType.Newspaper
+                : MaskingEventManager.TrialOccluderType.Pigeon;
+        }
+
+        return type == OccluderType.Static
+            ? MaskingEventManager.TrialOccluderType.Sign
+            : MaskingEventManager.TrialOccluderType.Butterfly;
+    }
+
+    public int GetCurrentOcclusionRatio()
+    {
+        OcclusionSize occSize = ReadOcclusionSize();
+        return (occSize == OcclusionSize.Small) ? smallOcclusionRatio : largeOcclusionRatio;
     }
 }
