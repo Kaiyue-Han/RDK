@@ -431,10 +431,10 @@ public class GainSearchFlowController : MonoBehaviour
         }
     }
 
-    public void StopSearch()
+    public void StopSearch(string reason = "STOP_SEARCH")
     {
         phase = SearchPhase.Finished;
-        stopReason = "STOP_SEARCH";
+        stopReason = string.IsNullOrEmpty(reason) ? "STOP_SEARCH" : reason;
         evaluationPending = false;
         evaluationInProgress = false;
         noticedDuringCurrentEvaluation = false;
@@ -450,18 +450,23 @@ public class GainSearchFlowController : MonoBehaviour
 
         if (debugLog)
         {
-            Debug.Log("[GainSearchFlowController] Search stopped manually.", this);
+            Debug.Log($"[GainSearchFlowController] Search stopped manually. Reason={stopReason}", this);
         }
     }
 
     public void ResetSearch()
     {
-        if (eventLogger != null && maskingEventManager != null)
+        ResetSearch("SearchReset", true);
+    }
+
+    public void ResetSearch(string resetReason, bool logReset)
+    {
+        if (logReset && eventLogger != null && maskingEventManager != null)
         {
             eventLogger.LogResetEvent(
                 "MANUAL_RESET",
                 maskingEventManager,
-                "SearchReset"
+                string.IsNullOrEmpty(resetReason) ? "SearchReset" : resetReason
             );
         }
 
@@ -500,7 +505,7 @@ public class GainSearchFlowController : MonoBehaviour
         if (debugLog)
         {
             Debug.Log(
-                $"[GainSearchFlowController] Search reset. " +
+                $"[GainSearchFlowController] Search reset. Reason={resetReason}. " +
                 $"Phase={phase}, Test={currentTestThetaDeg}, Step={currentStepDeg}",
                 this
             );

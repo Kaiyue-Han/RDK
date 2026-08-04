@@ -18,38 +18,53 @@ public class PlayAreaRectProvider : MonoBehaviour
     public float HalfW => width * 0.5f;
     public float HalfD => depth * 0.5f;
 
-    void Start()
+    private void Start()
     {
         if (lockCenterAtStart)
-        {
             CenterXZ = GetHmdXZ();
-        }
     }
 
     /// <summary>
-    /// 现在返回的是“现实世界位置”：
-    /// 来自 PhysicalPositionTracker，而不是 HMD 世界坐标。
+    /// Returns the participant's accumulated physical position in tracking-space XZ.
+    /// This comes from PhysicalPositionTracker, not from the virtual world position.
     /// </summary>
     public Vector2 GetHmdXZ()
     {
-        if (physicalTracker == null) return Vector2.zero;
+        if (physicalTracker == null)
+            return Vector2.zero;
+
         return physicalTracker.PhysicalPositionXZ;
     }
 
     /// <summary>
-    /// 朝向仍然先用 HMD forward。
+    /// Returns HMD forward projected onto XZ in the same tracking-space coordinate
+    /// frame used by PhysicalPositionTracker. This is used only as a fallback when
+    /// recent physical displacement is insufficient for a reliable walking direction.
     /// </summary>
     public Vector2 GetHmdForwardXZ()
     {
-        if (hmd == null) return Vector2.zero;
+        if (hmd == null)
+            return Vector2.zero;
 
-        Vector3 f3 = hmd.forward;
-        Vector2 f = new Vector2(f3.x, f3.z);
-        float m2 = f.sqrMagnitude;
-        return m2 < 1e-6f ? Vector2.zero : f / Mathf.Sqrt(m2);
+        Vector3 forward = hmd.forward;
+
+        if (
+            physicalTracker != null &&
+            physicalTracker.cameraOffset != null
+        )
+        {
+            forward = physicalTracker.cameraOffset.InverseTransformDirection(forward);
+        }
+
+        Vector2 projected = new Vector2(forward.x, forward.z);
+        float magnitudeSquared = projected.sqrMagnitude;
+
+        return magnitudeSquared < 1e-6f
+            ? Vector2.zero
+            : projected / Mathf.Sqrt(magnitudeSquared);
     }
 
-    /// <summary>到最近边界的距离（在矩形内为正；出界为负）</summary>
+    /// <summary>Distance to the nearest rectangle boundary. Positive inside, negative outside.</summary>
     public float DistanceToBoundary(Vector2 pXZ)
     {
         float dx = HalfW - Mathf.Abs(pXZ.x - CenterXZ.x);
@@ -65,13 +80,18 @@ public class PlayAreaRectProvider : MonoBehaviour
 
     public Rect AsRect()
     {
-        return new Rect(CenterXZ.x - HalfW, CenterXZ.y - HalfD, width, depth);
+        return new Rect(
+            CenterXZ.x - HalfW,
+            CenterXZ.y - HalfD,
+            width,
+            depth
+        );
     }
 
-    void OnDrawGizmos()
+    private void OnDrawGizmos()
     {
-        if (!drawGizmos) return;
-        if (!Application.isPlaying) return;
+        if (!drawGizmos || !Application.isPlaying)
+            return;
 
         Rect r = AsRect();
         Vector3 a = new Vector3(r.xMin, 0f, r.yMin);

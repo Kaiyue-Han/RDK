@@ -184,7 +184,7 @@ public class ExperimentTrialController : MonoBehaviour
         finalConfirmedThetaDeg = 0f;
         finalSuccess = false;
 
-        currentConditionName = maskingEventManager.CurrentConditionName;
+        currentConditionName = maskingEventManager.CurrentConditionKey;
 
         if (debugLog)
         {
@@ -242,7 +242,7 @@ public class ExperimentTrialController : MonoBehaviour
         }
 
         if (searchFlowController != null)
-            searchFlowController.StopSearch();
+            searchFlowController.StopSearch("ABORTED");
 
         if (maskingEventManager != null)
             maskingEventManager.AbortAndResetToIdle();
@@ -330,6 +330,23 @@ public class ExperimentTrialController : MonoBehaviour
 
     public void ResetTrialState()
     {
+        ResetTrialState("ManualReset", true);
+    }
+
+    public void ResetTrialState(string resetReason, bool logReset)
+    {
+        bool wasActive = trialRunning || trialPaused || trialFinished;
+
+        if (logReset && eventLogger != null && maskingEventManager != null)
+        {
+            eventLogger.LogResetEvent(
+                "TRIAL_RESET",
+                maskingEventManager,
+                string.IsNullOrEmpty(resetReason) ? "ManualReset" : resetReason,
+                $"wasActive={wasActive.ToString().ToLowerInvariant()};wasRunning={trialRunning.ToString().ToLowerInvariant()};wasFinished={trialFinished.ToString().ToLowerInvariant()};wasPaused={trialPaused.ToString().ToLowerInvariant()}"
+            );
+        }
+
         trialRunning = false;
         trialFinished = false;
         trialPaused = false;
@@ -342,9 +359,14 @@ public class ExperimentTrialController : MonoBehaviour
         finalConfirmedThetaDeg = 0f;
         finalSuccess = false;
 
+        if (experimentUIController != null)
+        {
+            experimentUIController.SetUIInteractable(true);
+        }
+
         if (debugLog)
         {
-            Debug.Log("[ExperimentTrialController] Trial state reset.", this);
+            Debug.Log($"[ExperimentTrialController] Trial state reset. Reason={resetReason}", this);
         }
     }
 

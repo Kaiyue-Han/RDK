@@ -15,43 +15,73 @@ public class WorldRotator : MonoBehaviour
     [Header("During occlusion (optional, recommended later)")]
     public bool reduceBaseDuringOcclusion = false;
     public float baseScaleDuringOcclusion = 0.2f;
-    public bool occlusionActive = false; // 以后用 MaskingEventManager.OnOcclusionStart/End 来驱动
+    public bool occlusionActive = false;
 
-    float smoothedYawRate;
+    private float smoothedYawRate;
 
-    void Update()
+    private void Update()
     {
-        if (virtualWorldRoot == null || hmd == null) return;
+        if (virtualWorldRoot == null || hmd == null)
+            return;
 
         float dt = Time.deltaTime;
 
-        // 1) base
-        float omegaBase = baseController != null ? baseController.ComputeBaseYawRate() : 0f;
+        // 1) Continuous base redirection.
+        float omegaBase = baseController != null
+            ? baseController.ComputeBaseYawRate()
+            : 0f;
 
         if (reduceBaseDuringOcclusion && occlusionActive)
             omegaBase *= baseScaleDuringOcclusion;
 
-        // 2) 把 base 传给注入器（同向规则）
+        // 2) The experimental injection must follow the current base direction.
         if (injectionController != null)
             injectionController.SetBaseYawRateForThisFrame(omegaBase);
 
-        // 3) event
-        float omegaEvent = injectionController != null ? injectionController.ComputeEventYawRate(dt) : 0f;
+        // 3) Event-based extra rotation.
+        float omegaEvent = injectionController != null
+            ? injectionController.ComputeEventYawRate(dt)
+            : 0f;
 
-        // 4) 合成 + 平滑 + 限幅
-        float omegaTotal = Mathf.Clamp(omegaBase + omegaEvent, -totalYawRateMax, totalYawRateMax);
-        smoothedYawRate = SmoothExp(smoothedYawRate, omegaTotal, smoothingTau, dt);
+        // 4) Combine, limit, and smooth.
+        float omegaTotal = Mathf.Clamp(
+            omegaBase + omegaEvent,
+            -totalYawRateMax,
+            totalYawRateMax
+        );
 
-        // 5) RotateAround
+        smoothedYawRate = SmoothExp(
+            smoothedYawRate,
+            omegaTotal,
+            smoothingTau,
+            dt
+        );
+
+        // 5) Rotate the virtual world around the participant.
         float deltaYaw = smoothedYawRate * dt;
-        Vector3 pivot = hmd.position; pivot.y = 0f;
+        Vector3 pivot = hmd.position;
+        pivot.y = 0f;
         virtualWorldRoot.RotateAround(pivot, Vector3.up, deltaYaw);
     }
 
-    static float SmoothExp(float current, float target, float tau, float dt)
+    private static float SmoothExp(float current, float target, float tau, float dt)
     {
-        if (tau <= 1e-4f) return target;
+        if (tau <= 1e-4f)
+            return target;
+
         float a = 1f - Mathf.Exp(-dt / tau);
         return Mathf.Lerp(current, target, a);
+    }
+
+    public void ResetRuntimeState()
+    {
+        smoothedYawRate = 0f;
+        occlusionActive = false;
+
+        if (baseController != null)
+            baseController.ResetRuntimeState();
+
+        if (injectionController != null)
+            injectionController.ResetDirectionCache();
     }
 }

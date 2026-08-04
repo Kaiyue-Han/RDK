@@ -142,14 +142,19 @@ public class MaskingEventManager : MonoBehaviour
 
     public void ClearTrial()
     {
-        AbortAndResetToIdle("ClearTrial");
+        ClearTrial("ClearTrial", true);
+    }
+
+    public void ClearTrial(string resetReason, bool logReset)
+    {
+        AbortAndResetToIdle(string.IsNullOrEmpty(resetReason) ? "ClearTrial" : resetReason, logReset);
 
         isTrialConfigured = false;
         isTrialRunning = false;
         currentOccluderType = TrialOccluderType.Newspaper;
         currentOcclusionRatio = 40;
 
-        Debug.Log("[MaskingEventManager] Trial cleared.");
+        Debug.Log($"[MaskingEventManager] Trial cleared. Reason={resetReason}");
     }
 
     public bool DebugTriggerCurrentOcclusion()
@@ -219,6 +224,11 @@ public class MaskingEventManager : MonoBehaviour
 
     public void AbortAndResetToIdle(string resetReason = "AbortAndResetToIdle")
     {
+        AbortAndResetToIdle(resetReason, true);
+    }
+
+    public void AbortAndResetToIdle(string resetReason, bool logReset)
+    {
         activeOccluder?.Hide();
         newspaperOccluder?.Hide();
         pigeonOccluder?.Hide();
@@ -230,11 +240,14 @@ public class MaskingEventManager : MonoBehaviour
         injectFired = false;
         currentOcclusionDuration = 0f;
 
-        logger?.LogResetEvent(
-            "RESET_TO_IDLE",
-            this,
-            resetReason
-        );
+        if (logReset)
+        {
+            logger?.LogResetEvent(
+                "RESET_TO_IDLE",
+                this,
+                resetReason
+            );
+        }
     }
 
     public void SetOcclusionRatio(int ratio)

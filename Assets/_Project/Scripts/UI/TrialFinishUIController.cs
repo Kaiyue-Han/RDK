@@ -14,22 +14,36 @@ public class TrialFinishUIController : MonoBehaviour
     [SerializeField] private GameObject trialCompletePanel;
     [SerializeField] private TMP_Text completeText;
 
-    [Header("Experimenter UI")]
+    [Header("Legacy Experimenter UI")]
+    [Tooltip("Optional old single result text. It will show a compact summary if assigned.")]
     [SerializeField] private TMP_Text resultText;
 
+    [Header("Result Page UI")]
+    [SerializeField] private TMP_Text conditionText;
+    [SerializeField] private TMP_Text estimatedThresholdText;
+    [SerializeField] private TMP_Text resultStatusText;
+    [SerializeField] private TMP_Text reversalsText;
+    [SerializeField] private TMP_Text validTrialsText;
+    [SerializeField] private TMP_Text stopReasonText;
+
+    [Header("Refresh")]
+    [SerializeField] private bool autoRefreshResultPage = true;
+    [SerializeField] private float refreshIntervalSec = 0.25f;
+
     private bool shownFinished = false;
+    private float nextRefreshTime = 0f;
 
     private void Start()
     {
         if (trialCompletePanel != null)
             trialCompletePanel.SetActive(false);
 
-        RefreshResultText(false);
+        RefreshResultPage();
     }
 
     private void Update()
     {
-        // If experimenter UI is opened, automatically hide participant finish panel
+        // If experimenter UI is opened, automatically hide participant finish panel.
         if (experimenterPanelRoot != null &&
             experimenterPanelRoot.activeSelf &&
             trialCompletePanel != null &&
@@ -38,9 +52,7 @@ public class TrialFinishUIController : MonoBehaviour
             trialCompletePanel.SetActive(false);
         }
 
-        if (trialController == null) return;
-
-        if (!shownFinished && trialController.TrialFinished)
+        if (trialController != null && !shownFinished && trialController.TrialFinished)
         {
             shownFinished = true;
 
@@ -50,7 +62,13 @@ public class TrialFinishUIController : MonoBehaviour
             if (completeText != null)
                 completeText.text = "Trial Complete\nPlease wait for the experimenter.";
 
-            RefreshResultText(true);
+            RefreshResultPage();
+        }
+
+        if (autoRefreshResultPage && Time.time >= nextRefreshTime)
+        {
+            nextRefreshTime = Time.time + Mathf.Max(0.05f, refreshIntervalSec);
+            RefreshResultPage();
         }
     }
 
@@ -61,33 +79,163 @@ public class TrialFinishUIController : MonoBehaviour
         if (trialCompletePanel != null)
             trialCompletePanel.SetActive(false);
 
-        RefreshResultText(false);
+        RefreshResultPage();
     }
 
-    private void RefreshResultText(bool finished)
+    public void RefreshResultPage()
     {
-        if (resultText == null)
-            return;
+        string condition = GetConditionText();
+        string status = GetResultStatus();
+        string threshold = GetThresholdText(status);
+        string reversals = GetReversalsText();
+        string validTrials = GetValidTrialsText();
+        string stopReason = GetStopReasonText(status);
 
-        if (!finished)
+        if (conditionText != null)
+            conditionText.text = $"Condition: {condition}";
+
+        if (estimatedThresholdText != null)
+            estimatedThresholdText.text = $"Estimated Threshold: {threshold}";
+
+        if (resultStatusText != null)
+            resultStatusText.text = $"Result Status: {status}";
+
+        if (reversalsText != null)
+            reversalsText.text = $"Reversals: {reversals}";
+
+        if (validTrialsText != null)
+            validTrialsText.text = $"Valid Trials: {validTrials}";
+
+        if (stopReasonText != null)
+            stopReasonText.text = $"Stop Reason: {stopReason}";
+
+        if (resultText != null)
         {
-            resultText.text = "Estimated Threshold: -";
-            return;
+            resultText.text =
+                $"Condition: {condition}\n" +
+                $"Estimated Threshold: {threshold}\n" +
+                $"Result Status: {status}\n" +
+                $"Reversals: {reversals}\n" +
+                $"Valid Trials: {validTrials}\n" +
+                $"Stop Reason: {stopReason}";
+        }
+    }
+
+    private string GetConditionText()
+    {
+        if (trialController != null && !string.IsNullOrEmpty(trialController.CurrentConditionName) && trialController.CurrentConditionName != "Unknown")
+            return trialController.CurrentConditionName;
+
+        return "-";
+    }
+
+    private string GetResultStatus()
+    {
+        if (searchFlowController == null)
+            return "Unavailable";
+
+        if (trialController != null)
+        {
+            if (trialController.TrialPaused)
+                return "Paused";
+
+            if (trialController.TrialRunning && !trialController.TrialFinished)
+                return "Running";
+
+            if (trialController.TrialFinished)
+            {
+                if (IsAbortStopReason(searchFlowController.StopReason))
+                    return "Aborted";
+
+                return searchFlowController.HasEstimatedThreshold && searchFlowController.ThresholdReliable
+                    ? "Complete"
+                    : "Incomplete";
+            }
         }
 
-        float theta = -1f;
+        if (searchFlowController.Phase == GainSearchFlowController.SearchPhase.Staircase)
+            return "Running";
 
-        if (searchFlowController != null && searchFlowController.HasConfirmedUpperAcceptableTheta)
+        if (searchFlowController.Phase == GainSearchFlowController.SearchPhase.Finished)
         {
-            theta = searchFlowController.ConfirmedUpperAcceptableThetaDeg;
-        }
-        else if (trialController != null && trialController.FinalConfirmedThetaDeg > 0f)
-        {
-            theta = trialController.FinalConfirmedThetaDeg;
+            if (IsAbortStopReason(searchFlowController.StopReason))
+                return "Aborted";
+
+            return searchFlowController.HasEstimatedThreshold && searchFlowController.ThresholdReliable
+                ? "Complete"
+                : "Incomplete";
         }
 
-        resultText.text = theta >= 0f
-            ? $"Estimated Threshold: {theta:F1}°"
-            : "Estimated Threshold: -";
+        return "Pending";
+    }
+
+    private string GetThresholdText(string status)
+    {
+        if (searchFlowController != null && searchFlowController.HasEstimatedThreshold)
+            return $"{searchFlowController.EstimatedThresholdDeg:F1}°";
+
+        if (status == "Running" || status == "Paused")
+            return "Pending";
+
+        if (status == "Incomplete" || status == "Aborted")
+            return "Not available";
+
+        return "-";
+    }
+
+    private string GetReversalsText()
+    {
+        if (searchFlowController == null)
+            return "-";
+
+        return $"{searchFlowController.ReversalCount} / {searchFlowController.TargetReversalCount}";
+    }
+
+    private string GetValidTrialsText()
+    {
+        if (searchFlowController == null)
+            return "-";
+
+        return $"{searchFlowController.ValidTrialCount} / {searchFlowController.MaxValidTrials}";
+    }
+
+    private string GetStopReasonText(string status)
+    {
+        if (searchFlowController == null)
+            return "-";
+
+        if (status == "Running" || status == "Paused" || status == "Pending")
+            return "-";
+
+        return FormatStopReason(searchFlowController.StopReason);
+    }
+
+    private static bool IsAbortStopReason(string reason)
+    {
+        return reason == "ABORTED" || reason == "STOP_SEARCH" || reason == "TRIAL_ABORT";
+    }
+
+    private static string FormatStopReason(string reason)
+    {
+        if (string.IsNullOrEmpty(reason) || reason == "NONE")
+            return "-";
+
+        switch (reason)
+        {
+            case "RUNNING":
+                return "-";
+            case "TARGET_REVERSALS_REACHED":
+                return "Target reversals reached";
+            case "MAX_VALID_TRIALS_REACHED":
+                return "Max valid trials reached";
+            case "ABORTED":
+            case "STOP_SEARCH":
+            case "TRIAL_ABORT":
+                return "Manual abort";
+            case "RESET":
+                return "Reset";
+            default:
+                return reason.Replace('_', ' ');
+        }
     }
 }
