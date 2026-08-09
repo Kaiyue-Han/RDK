@@ -24,14 +24,11 @@ public class WalkingDetector : MonoBehaviour
     [Tooltip("Minimum accumulated horizontal displacement in the recent walking window (m)")]
     public float minWalkingDistance = 0.20f;
 
-    [Tooltip("How long the walking conditions must hold before IsWalking becomes true (s)")]
-    public float minWalkingDuration = 0.30f;
-
     [Tooltip("Speed smoothing time constant (s)")]
     public float speedSmoothingTau = 0.25f;
 
     [Header("Optional hysteresis")]
-    [Tooltip("How long to keep walking state after conditions fail slightly (s)")]
+    [Tooltip("How long to keep the walking state after conditions fail slightly (s)")]
     public float walkingHoldTime = 0.10f;
 
     [Header("Debug")]
@@ -40,14 +37,12 @@ public class WalkingDetector : MonoBehaviour
     public bool IsWalking { get; private set; }
     public float SmoothedSpeed => speedSmoothed;
     public float AccumulatedDistance => accumulatedDistance;
-    public float WalkingTimer => walkingTimer;
 
     private Vector2 lastPosXZ;
     private bool hasLastPos;
 
     private float speedSmoothed;
     private float accumulatedDistance;
-    private float walkingTimer;
     private float holdTimer;
 
     private bool wasControllerLocomotionLastFrame;
@@ -135,25 +130,35 @@ public class WalkingDetector : MonoBehaviour
 
         bool passSpeed = speedSmoothed >= minWalkingSpeed;
         bool passDistance = accumulatedDistance >= minWalkingDistance;
+        bool walkingConditionsMet = passSpeed && passDistance;
 
-        if (passSpeed && passDistance)
+        if (walkingConditionsMet)
         {
-            walkingTimer += dt;
-            holdTimer = walkingHoldTime;
+            // 速度和近期累计位移都满足条件，立即确认正在真实行走。
+            IsWalking = true;
+
+            // 条件持续满足时，不断刷新停止宽限时间。
+            holdTimer = Mathf.Max(0f, walkingHoldTime);
+        }
+        else if (IsWalking)
+        {
+            // 已经确认正在行走，但条件短暂失效时，先使用宽限时间保持状态。
+            holdTimer = Mathf.Max(0f, holdTimer - dt);
+
+            if (holdTimer <= 0f)
+                IsWalking = false;
         }
         else
         {
-            walkingTimer = 0f;
-            holdTimer = Mathf.Max(0f, holdTimer - dt);
+            holdTimer = 0f;
         }
-
-        IsWalking = (walkingTimer >= minWalkingDuration) || (holdTimer > 0f);
 
         if (logDebug)
         {
             Debug.Log(
                 $"[WalkingDetector] speed={speedSmoothed:F3}, dist={accumulatedDistance:F3}, " +
-                $"timer={walkingTimer:F2}, hold={holdTimer:F2}, walking={IsWalking}");
+                $"passSpeed={passSpeed}, passDistance={passDistance}, " +
+                $"hold={holdTimer:F2}, walking={IsWalking}");
         }
     }
 
@@ -162,7 +167,6 @@ public class WalkingDetector : MonoBehaviour
         hasLastPos = false;
         speedSmoothed = 0f;
         accumulatedDistance = 0f;
-        walkingTimer = 0f;
         holdTimer = 0f;
         IsWalking = false;
     }
@@ -186,7 +190,9 @@ public class WalkingDetector : MonoBehaviour
 
     private static float SmoothExp(float current, float target, float tau, float dt)
     {
-        if (tau <= 1e-4f) return target;
+        if (tau <= 1e-4f)
+            return target;
+
         float a = 1f - Mathf.Exp(-dt / tau);
         return Mathf.Lerp(current, target, a);
     }

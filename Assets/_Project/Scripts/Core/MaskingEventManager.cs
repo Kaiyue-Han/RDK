@@ -12,7 +12,8 @@ public class MaskingEventManager : MonoBehaviour
         Newspaper,
         Pigeon,
         Sign,
-        Butterfly
+        Butterfly,
+        NoOccluder
     }
 
     [Header("Formal Trial Modules - Follow HMD")]
@@ -34,6 +35,10 @@ public class MaskingEventManager : MonoBehaviour
     [Tooltip("Used by dynamic occluders: Pigeon and Butterfly.")]
     [FormerlySerializedAs("pigeonOcclusionSec")]
     [SerializeField] private float dynamicOcclusionSec = 0.85f;
+
+    [Tooltip("Timing window used by the No Occluder baseline. No visual object is shown, but the injection point and evaluation timing still run normally.")]
+    [Min(0.05f)]
+    [SerializeField] private float noOccluderWindowSec = 0.7f;
 
     [Range(0f, 1f)]
     public float injectAt = 0.5f;
@@ -71,11 +76,18 @@ public class MaskingEventManager : MonoBehaviour
     public bool IsOcclusionActive => isOcclusionActive;
 
     public TrialOccluderType CurrentOccluderType => currentOccluderType;
-    public int CurrentOcclusionRatio => currentOcclusionRatio;
-    public string CurrentAnchorModeName => IsWorldFixedOccluder(currentOccluderType) ? "WorldFixed" : "FollowHMD";
-    public string CurrentMotionModeName => IsStaticOccluder(currentOccluderType) ? "Static" : "Dynamic";
+    public bool IsNoOccluderCondition => currentOccluderType == TrialOccluderType.NoOccluder;
+    public int CurrentOcclusionRatio => IsNoOccluderCondition ? 0 : currentOcclusionRatio;
+    public string CurrentAnchorModeName => IsNoOccluderCondition
+        ? "None"
+        : (IsWorldFixedOccluder(currentOccluderType) ? "WorldFixed" : "FollowHMD");
+    public string CurrentMotionModeName => IsNoOccluderCondition
+        ? "None"
+        : (IsStaticOccluder(currentOccluderType) ? "Static" : "Dynamic");
     public string CurrentVisualName => GetVisualName(currentOccluderType);
-    public string CurrentConditionKey => $"{CurrentAnchorModeName}_{CurrentMotionModeName}_{currentOcclusionRatio}";
+    public string CurrentConditionKey => IsNoOccluderCondition
+        ? "NoOccluder"
+        : $"{CurrentAnchorModeName}_{CurrentMotionModeName}_{currentOcclusionRatio}";
     public string CurrentConditionName => BuildCurrentConditionName();
 
     private IOccluder newspaperOccluder;
@@ -125,7 +137,9 @@ public class MaskingEventManager : MonoBehaviour
         AbortAndResetToIdle("ConfigureTrial");
 
         currentOccluderType = occluderType;
-        currentOcclusionRatio = ratio;
+        currentOcclusionRatio = occluderType == TrialOccluderType.NoOccluder
+            ? 0
+            : ratio;
 
         isTrialConfigured = true;
         isTrialRunning = true;
@@ -199,8 +213,11 @@ public class MaskingEventManager : MonoBehaviour
             return false;
         }
 
-        activeOccluder = GetCurrentOccluder();
-        if (activeOccluder == null)
+        activeOccluder = IsNoOccluderCondition
+            ? null
+            : GetCurrentOccluder();
+
+        if (!IsNoOccluderCondition && activeOccluder == null)
         {
             Debug.LogError($"[MaskingEventManager] Trigger failed: current occluder is null. Type={currentOccluderType}");
             return false;
@@ -216,9 +233,14 @@ public class MaskingEventManager : MonoBehaviour
             this
         );
 
-        activeOccluder.Show(currentOcclusionRatio, currentOcclusionDuration);
+        if (!IsNoOccluderCondition)
+            activeOccluder.Show(currentOcclusionRatio, currentOcclusionDuration);
 
-        Debug.Log($"[MaskingEventManager] TriggerCurrentOcclusion: Type={currentOccluderType}, Ratio={currentOcclusionRatio}, Duration={currentOcclusionDuration}, Condition={BuildCurrentConditionName()}");
+        Debug.Log(
+            $"[MaskingEventManager] TriggerCurrentOcclusion: " +
+            $"Type={currentOccluderType}, Ratio={CurrentOcclusionRatio}, " +
+            $"Duration={currentOcclusionDuration}, Condition={BuildCurrentConditionName()}"
+        );
         return true;
     }
 
@@ -252,7 +274,7 @@ public class MaskingEventManager : MonoBehaviour
 
     public void SetOcclusionRatio(int ratio)
     {
-        currentOcclusionRatio = ratio;
+        currentOcclusionRatio = IsNoOccluderCondition ? 0 : ratio;
     }
 
     private bool WasDebugTriggerPressed()
@@ -351,6 +373,9 @@ public class MaskingEventManager : MonoBehaviour
 
     private float GetCurrentOcclusionDuration()
     {
+        if (IsNoOccluderCondition)
+            return noOccluderWindowSec;
+
         return IsStaticOccluder(currentOccluderType)
             ? staticOcclusionSec
             : dynamicOcclusionSec;
@@ -363,7 +388,9 @@ public class MaskingEventManager : MonoBehaviour
 
     public string BuildCurrentConditionName()
     {
-        return $"{CurrentConditionKey}_{CurrentVisualName}";
+        return IsNoOccluderCondition
+            ? "NoOccluder"
+            : $"{CurrentConditionKey}_{CurrentVisualName}";
     }
 
     private bool IsWorldFixedOccluder(TrialOccluderType type)
@@ -383,6 +410,8 @@ public class MaskingEventManager : MonoBehaviour
                 return "Sign";
             case TrialOccluderType.Butterfly:
                 return "Butterfly";
+            case TrialOccluderType.NoOccluder:
+                return "None";
             default:
                 return "Unknown";
         }

@@ -1,8 +1,18 @@
 using System.Collections.Generic;
 using UnityEngine;
 
+public enum BaseSteeringMode
+{
+    CenterSeeking,
+    FixedCurvature
+}
+
 public class BaseSteeringController : MonoBehaviour
 {
+    [Header("Steering mode")]
+    [Tooltip("CenterSeeking is used by the original Bamberg route. FixedCurvature is used by the straight-line route.")]
+    public BaseSteeringMode steeringMode = BaseSteeringMode.CenterSeeking;
+
     [Header("Dependencies")]
     public PlayAreaRectProvider playArea;
 
@@ -13,6 +23,14 @@ public class BaseSteeringController : MonoBehaviour
     public bool enableBase = true;
     public float boundaryBuffer = 1.0f;
     public float baseYawRateMax = 8f;
+
+    [Header("Fixed curvature mode")]
+    [Tooltip("Virtual-world rotation applied per meter of physical walking (degrees per meter). Used only in FixedCurvature mode.")]
+    [Min(0f)]
+    public float fixedCurvatureDegPerMeter = 20f;
+
+    [Tooltip("Use +1 or -1 to select the fixed rotation direction. Confirm the intended physical curve direction once in the headset.")]
+    public float fixedTurnSign = 1f;
 
     [Header("Walking direction estimation")]
     [Tooltip("Prefer the participant's recent physical XZ displacement over HMD forward when computing the base steering direction.")]
@@ -73,14 +91,13 @@ public class BaseSteeringController : MonoBehaviour
 
     private void Update()
     {
-        SamplePhysicalMovementOncePerFrame();
+        if (steeringMode == BaseSteeringMode.CenterSeeking)
+            SamplePhysicalMovementOncePerFrame();
     }
 
     public float ComputeBaseYawRate()
     {
-        SamplePhysicalMovementOncePerFrame();
-
-        if (!enableBase || playArea == null)
+        if (!enableBase)
             return 0f;
 
         if (walkingDetector != null && !walkingDetector.IsWalking)
@@ -91,6 +108,41 @@ public class BaseSteeringController : MonoBehaviour
             ResetStability();
             return 0f;
         }
+
+        if (steeringMode == BaseSteeringMode.FixedCurvature)
+        {
+            ResetStability();
+
+            if (walkingDetector == null)
+            {
+                if (logDebug)
+                    Debug.LogWarning("[Base] FixedCurvature requires WalkingDetector.");
+
+                return 0f;
+            }
+
+            float speed = Mathf.Max(0f, walkingDetector.SmoothedSpeed);
+            float sign = fixedTurnSign >= 0f ? 1f : -1f;
+
+            // deg/s = (m/s) * (deg/m)
+            float omegaFixed = speed * Mathf.Max(0f, fixedCurvatureDegPerMeter) * sign;
+
+            if (logDebug)
+            {
+                Debug.Log(
+                    $"[Base-Fixed] speed={speed:F3}m/s, " +
+                    $"curvature={fixedCurvatureDegPerMeter:F2}deg/m, " +
+                    $"sign={sign:F0}, omega={omegaFixed:F2}deg/s"
+                );
+            }
+
+            return omegaFixed;
+        }
+
+        SamplePhysicalMovementOncePerFrame();
+
+        if (playArea == null)
+            return 0f;
 
         float turnSign = ComputeTurnSignToCenter();
 

@@ -2,17 +2,19 @@ using System;
 using System.Globalization;
 using System.IO;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public class EventLogger : MonoBehaviour
 {
     private const string Header =
-        "utc,mark,conditionKey,anchorMode,motionMode,occluderName,occlusionRatio,timeSec,success,testThetaDeg,noticed,validTrial,invalidReason,currentStepDeg,staircaseDeltaDeg,nextThetaDeg,isReversal,reversalIndex,reversalCount,estimatedThresholdDeg,usedReversals,allReversals,baseYawRateAtInjection,injectionSign,signedInjectedThetaDeg,injectionOutcome,resetReason,extra";
+        "utc,mark,sceneName,conditionKey,anchorMode,motionMode,occluderName,occlusionRatio,timeSec,success,testThetaDeg,noticed,validTrial,invalidReason,currentStepDeg,staircaseDeltaDeg,nextThetaDeg,isReversal,reversalIndex,reversalCount,estimatedThresholdDeg,usedReversals,allReversals,baseYawRateAtInjection,injectionSign,signedInjectedThetaDeg,injectionOutcome,resetReason,extra";
 
     private string csvPath;
 
     private struct LogRow
     {
         public string mark;
+        public string sceneName;
         public string conditionKey;
         public string anchorMode;
         public string motionMode;
@@ -175,6 +177,9 @@ public class EventLogger : MonoBehaviour
     {
         EnsureHeader();
 
+        if (string.IsNullOrEmpty(row.sceneName))
+            row.sceneName = SceneManager.GetActiveScene().name;
+
         string utc = DateTime.UtcNow.ToString("o");
         string timeSec = FormatFloat(Time.time);
 
@@ -182,6 +187,7 @@ public class EventLogger : MonoBehaviour
         {
             utc,
             row.mark,
+            row.sceneName,
             row.conditionKey,
             row.anchorMode,
             row.motionMode,

@@ -19,6 +19,10 @@ public class ExperimentUIController : MonoBehaviour
     [SerializeField] private Toggle sizeSmall;
     [SerializeField] private Toggle sizeLarge;
 
+    [Header("No Occluder Baseline")]
+    [Tooltip("When selected, no visual occluder is shown. The same injection and staircase flow still run.")]
+    [SerializeField] private Toggle noOccluder;
+
     [Header("Apply Button")]
     [SerializeField] private Button applyButton;
 
@@ -43,6 +47,8 @@ public class ExperimentUIController : MonoBehaviour
     [Tooltip("If true, UI options are locked after Apply(). If false, they stay editable even after the trial controller starts.")]
     [SerializeField] private bool lockUIAfterApply = false;
 
+    private bool uiGloballyInteractable = true;
+
     private void Awake()
     {
         if (applyButton) applyButton.onClick.AddListener(Apply);
@@ -50,6 +56,9 @@ public class ExperimentUIController : MonoBehaviour
         BindMutualExclusive(anchorFollowHmd, anchorWorldFixed);
         BindMutualExclusive(typeStatic, typeDynamic);
         BindMutualExclusive(sizeSmall, sizeLarge);
+
+        if (noOccluder)
+            noOccluder.onValueChanged.AddListener(_ => RefreshInteractability());
     }
 
     private void OnEnable()
@@ -116,16 +125,27 @@ public class ExperimentUIController : MonoBehaviour
 
         EnsureDefaults();
 
+        bool useNoOccluder = noOccluder && noOccluder.isOn;
+
         AnchorMode anchor = ReadAnchorMode();
         OccluderType type = ReadOccluderType();
         OcclusionSize occSize = ReadOcclusionSize();
-        int ratio = (occSize == OcclusionSize.Small) ? smallOcclusionRatio : largeOcclusionRatio;
 
-        MaskingEventManager.TrialOccluderType trialType = ConvertToTrialOccluder(anchor, type);
+        int ratio = useNoOccluder
+            ? 0
+            : (occSize == OcclusionSize.Small ? smallOcclusionRatio : largeOcclusionRatio);
+
+        MaskingEventManager.TrialOccluderType trialType = useNoOccluder
+            ? MaskingEventManager.TrialOccluderType.NoOccluder
+            : ConvertToTrialOccluder(anchor, type);
 
         maskingEventManager.ConfigureTrial(trialType, ratio);
 
-        Debug.Log($"[ExperimentUI] Apply: Anchor={anchor}, Type={type}, Ratio={ratio}, TrialOccluder={trialType}, LockUIAfterApply={lockUIAfterApply}");
+        Debug.Log(
+            $"[ExperimentUI] Apply: NoOccluder={useNoOccluder}, " +
+            $"Anchor={anchor}, Type={type}, Ratio={ratio}, " +
+            $"TrialOccluder={trialType}, LockUIAfterApply={lockUIAfterApply}"
+        );
 
         if (experimentTrialController != null)
             experimentTrialController.StartCurrentConfiguredTrial();
@@ -141,16 +161,26 @@ public class ExperimentUIController : MonoBehaviour
 
     public void SetUIInteractable(bool interactable)
     {
-        if (anchorFollowHmd) anchorFollowHmd.interactable = interactable;
-        if (anchorWorldFixed) anchorWorldFixed.interactable = interactable;
+        uiGloballyInteractable = interactable;
+        RefreshInteractability();
+    }
 
-        if (typeStatic) typeStatic.interactable = interactable;
-        if (typeDynamic) typeDynamic.interactable = interactable;
+    private void RefreshInteractability()
+    {
+        bool useNoOccluder = noOccluder && noOccluder.isOn;
+        bool regularOptionsInteractable = uiGloballyInteractable && !useNoOccluder;
 
-        if (sizeSmall) sizeSmall.interactable = interactable;
-        if (sizeLarge) sizeLarge.interactable = interactable;
+        if (anchorFollowHmd) anchorFollowHmd.interactable = regularOptionsInteractable;
+        if (anchorWorldFixed) anchorWorldFixed.interactable = regularOptionsInteractable;
 
-        if (applyButton) applyButton.interactable = interactable;
+        if (typeStatic) typeStatic.interactable = regularOptionsInteractable;
+        if (typeDynamic) typeDynamic.interactable = regularOptionsInteractable;
+
+        if (sizeSmall) sizeSmall.interactable = regularOptionsInteractable;
+        if (sizeLarge) sizeLarge.interactable = regularOptionsInteractable;
+
+        if (noOccluder) noOccluder.interactable = uiGloballyInteractable;
+        if (applyButton) applyButton.interactable = uiGloballyInteractable;
     }
 
     [ContextMenu("DEBUG Unlock UI")]
@@ -201,6 +231,9 @@ public class ExperimentUIController : MonoBehaviour
 
     public int GetCurrentOcclusionRatio()
     {
+        if (noOccluder && noOccluder.isOn)
+            return 0;
+
         OcclusionSize occSize = ReadOcclusionSize();
         return (occSize == OcclusionSize.Small) ? smallOcclusionRatio : largeOcclusionRatio;
     }
