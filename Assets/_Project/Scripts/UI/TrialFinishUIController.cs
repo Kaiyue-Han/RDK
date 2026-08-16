@@ -26,6 +26,12 @@ public class TrialFinishUIController : MonoBehaviour
     [SerializeField] private TMP_Text validTrialsText;
     [SerializeField] private TMP_Text stopReasonText;
 
+    [Header("Catch Control UI (Experimenter Only)")]
+    [Tooltip("Optional. Displays zero-catch false alarms, e.g. 1 / 2 (50%).")]
+    [SerializeField] private TMP_Text zeroCatchText;
+    [Tooltip("Optional. Displays high-catch detections, e.g. 1 / 1 (100%).")]
+    [SerializeField] private TMP_Text highCatchText;
+
     [Header("Refresh")]
     [SerializeField] private bool autoRefreshResultPage = true;
     [SerializeField] private float refreshIntervalSec = 0.25f;
@@ -90,6 +96,8 @@ public class TrialFinishUIController : MonoBehaviour
         string reversals = GetReversalsText();
         string validTrials = GetValidTrialsText();
         string stopReason = GetStopReasonText(status);
+        string catchFalseAlarms = GetCatchFalseAlarmText();
+        string catchHitRate = GetCatchHitRateText();
 
         if (conditionText != null)
             conditionText.text = $"Condition: {condition}";
@@ -109,6 +117,14 @@ public class TrialFinishUIController : MonoBehaviour
         if (stopReasonText != null)
             stopReasonText.text = $"Stop Reason: {stopReason}";
 
+        // These fields belong to the experimenter result page only.
+        // Nothing is shown on the participant trial-complete panel.
+        if (zeroCatchText != null)
+            zeroCatchText.text = $"Zero Catch: {catchFalseAlarms} false alarms";
+
+        if (highCatchText != null)
+            highCatchText.text = $"High Catch: {catchHitRate} detected";
+
         if (resultText != null)
         {
             resultText.text =
@@ -117,6 +133,8 @@ public class TrialFinishUIController : MonoBehaviour
                 $"Result Status: {status}\n" +
                 $"Reversals: {reversals}\n" +
                 $"Valid Trials: {validTrials}\n" +
+                $"Zero Catch: {catchFalseAlarms} false alarms\n" +
+                $"High Catch: {catchHitRate} detected\n" +
                 $"Stop Reason: {stopReason}";
         }
     }
@@ -197,6 +215,40 @@ public class TrialFinishUIController : MonoBehaviour
             return "-";
 
         return $"{searchFlowController.ValidTrialCount} / {searchFlowController.MaxValidTrials}";
+    }
+
+    private string GetCatchFalseAlarmText()
+    {
+        if (searchFlowController == null)
+            return "-";
+
+        if (!searchFlowController.CatchEventsEnabled)
+            return "Disabled";
+
+        int total = searchFlowController.ZeroCatchCount;
+        int falseAlarms = searchFlowController.ZeroCatchFalseAlarmCount;
+
+        if (total <= 0)
+            return "0 / 0 (-)";
+
+        return $"{falseAlarms} / {total} ({searchFlowController.ZeroCatchFalseAlarmRate:P0})";
+    }
+
+    private string GetCatchHitRateText()
+    {
+        if (searchFlowController == null)
+            return "-";
+
+        if (!searchFlowController.CatchEventsEnabled)
+            return "Disabled";
+
+        int total = searchFlowController.HighCatchCount;
+        int hits = searchFlowController.HighCatchHitCount;
+
+        if (total <= 0)
+            return "0 / 0 (-)";
+
+        return $"{hits} / {total} ({searchFlowController.HighCatchHitRate:P0})";
     }
 
     private string GetStopReasonText(string status)

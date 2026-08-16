@@ -131,6 +131,36 @@ public class EventLogger : MonoBehaviour
         WriteRow(row);
     }
 
+
+    public void LogCatchEvaluation(
+        string mark,
+        MaskingEventManager maskingEventManager,
+        string trialType,
+        float catchThetaDeg,
+        bool? noticed,
+        bool? validTrial,
+        string catchOutcome,
+        float heldStaircaseThetaDeg,
+        string invalidReason = "",
+        string extra = ""
+    )
+    {
+        LogRow row = CreateConditionRow(mark, maskingEventManager);
+        row.testThetaDeg = FormatFloat(catchThetaDeg);
+        row.noticed = noticed.HasValue ? BoolString(noticed.Value) : "";
+        row.validTrial = validTrial.HasValue ? BoolString(validTrial.Value) : "";
+        row.invalidReason = invalidReason;
+
+        string catchExtra =
+            $"trialType={trialType};" +
+            $"catchThetaDeg={FormatFloat(catchThetaDeg)};" +
+            $"catchOutcome={catchOutcome};" +
+            $"heldStaircaseThetaDeg={FormatFloat(heldStaircaseThetaDeg)}";
+
+        row.extra = MergeExtra(catchExtra, extra);
+        WriteRow(row);
+    }
+
     public void LogStaircaseResult(
         string mark,
         MaskingEventManager maskingEventManager,

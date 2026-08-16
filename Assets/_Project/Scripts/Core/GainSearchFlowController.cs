@@ -19,6 +19,13 @@ public class GainSearchFlowController : MonoBehaviour
         Custom
     }
 
+    public enum EvaluationTrialType
+    {
+        Normal,
+        CatchZero,
+        CatchHigh
+    }
+
     [Header("References")]
     [SerializeField] private ParticipantFeedbackController participantFeedback;
     [SerializeField] private RotationInjectionController injectionController;
@@ -41,6 +48,22 @@ public class GainSearchFlowController : MonoBehaviour
     [SerializeField] private int maxValidTrials = 30;
     [SerializeField] private float minThetaDeg = 0f;
     [SerializeField] private float maxThetaDeg = 25f;
+
+    [Header("Catch Events")]
+    [Tooltip("Insert control trials that do not update the staircase.")]
+    [SerializeField] private bool enableCatchEvents = true;
+
+    [Tooltip("Minimum number of VALID normal staircase trials between catch events.")]
+    [Min(1)]
+    [SerializeField] private int minNormalTrialsBetweenCatch = 7;
+
+    [Tooltip("Maximum number of VALID normal staircase trials between catch events. The actual interval is randomized inclusively.")]
+    [Min(1)]
+    [SerializeField] private int maxNormalTrialsBetweenCatch = 9;
+
+    [Tooltip("Extra event theta used by the high catch. It is clamped to the injection hard maximum. Zero catches always use 0 degrees.")]
+    [Min(0f)]
+    [SerializeField] private float highCatchThetaDeg = 25f;
 
     [Header("Auto Finish Evaluation")]
     [Tooltip("Evaluation is automatically finished this many seconds after occlusion ends. Feedback is only counted after injection starts.")]
@@ -68,6 +91,24 @@ public class GainSearchFlowController : MonoBehaviour
     public bool HasEstimatedThreshold => hasEstimatedThreshold;
     public bool ThresholdReliable => thresholdReliable;
     public string StopReason => stopReason;
+
+    public EvaluationTrialType CurrentEvaluationTrialType => currentEvaluationTrialType;
+    public bool CurrentEvaluationIsCatch => currentEvaluationTrialType != EvaluationTrialType.Normal;
+    public float CurrentPlannedThetaDeg => currentPlannedThetaDeg;
+
+    // Catch-event summary values exposed to the experimenter result UI.
+    // Catch trials remain excluded from staircase updates.
+    public bool CatchEventsEnabled => enableCatchEvents;
+    public int ZeroCatchCount => zeroCatchCount;
+    public int ZeroCatchFalseAlarmCount => zeroCatchFalseAlarmCount;
+    public float ZeroCatchFalseAlarmRate => zeroCatchCount > 0
+        ? (float)zeroCatchFalseAlarmCount / zeroCatchCount
+        : 0f;
+    public int HighCatchCount => highCatchCount;
+    public int HighCatchHitCount => highCatchHitCount;
+    public float HighCatchHitRate => highCatchCount > 0
+        ? (float)highCatchHitCount / highCatchCount
+        : 0f;
 
     // Backward-compatible names used by old UI/controller code.
     // After the staircase refactor, these represent the estimated staircase threshold.
@@ -100,6 +141,19 @@ public class GainSearchFlowController : MonoBehaviour
     private bool autoFinishScheduled = false;
     private float autoFinishTime = -1f;
 
+    // Catch-event runtime state. Catch trials are interleaved with the staircase
+    // but never change theta, reversal count, or validTrialCount.
+    private EvaluationTrialType currentEvaluationTrialType = EvaluationTrialType.Normal;
+    private float currentPlannedThetaDeg = 0f;
+    private int normalTrialsSinceLastCatch = 0;
+    private int nextCatchAfterNormalTrials = 7;
+    private int catchSequenceIndex = 0;
+
+    private int zeroCatchCount = 0;
+    private int zeroCatchFalseAlarmCount = 0;
+    private int highCatchCount = 0;
+    private int highCatchHitCount = 0;
+
     private void OnEnable()
     {
         if (maskingEventManager != null)
@@ -118,7 +172,9 @@ public class GainSearchFlowController : MonoBehaviour
 
         currentTestThetaDeg = GetConfiguredStartTheta();
         currentStepDeg = Mathf.Max(0.001f, initialStepDeg);
-        ApplyCurrentTestThetaToInjection();
+        ResetCatchState();
+        PlanNextEvaluation();
+        ApplyCurrentPlannedThetaToInjection();
     }
 
     private void Update()
@@ -221,7 +277,9 @@ public class GainSearchFlowController : MonoBehaviour
         if (injectionController != null)
             injectionController.ResetDirectionCache();
 
-        ApplyCurrentTestThetaToInjection();
+        ResetCatchState();
+        PlanNextEvaluation();
+        ApplyCurrentPlannedThetaToInjection();
 
         if (recordTriggerController != null)
             recordTriggerController.ResetTriggerState();
@@ -250,7 +308,12 @@ public class GainSearchFlowController : MonoBehaviour
             $"ignoreFirstReversals={ignoreFirstReversals};" +
             $"maxValidTrials={Mathf.Max(1, maxValidTrials)};" +
             $"minThetaDeg={FormatFloat(minThetaDeg)};" +
-            $"maxThetaDeg={FormatFloat(maxThetaDeg)}";
+            $"maxThetaDeg={FormatFloat(maxThetaDeg)};" +
+            $"catchEventsEnabled={enableCatchEvents.ToString().ToLowerInvariant()};" +
+            $"catchIntervalValidNormalTrials={Mathf.Max(1, minNormalTrialsBetweenCatch)}-{Mathf.Max(Mathf.Max(1, minNormalTrialsBetweenCatch), maxNormalTrialsBetweenCatch)};" +
+            $"zeroCatchThetaDeg=0.000;" +
+            $"highCatchThetaDeg={FormatFloat(GetClampedHighCatchThetaDeg())};" +
+            $"catchTypePattern=ZERO-HIGH-ZERO";
     }
 
     public void NotifyEvaluationTriggered()
@@ -295,26 +358,48 @@ public class GainSearchFlowController : MonoBehaviour
 
         if (eventLogger != null && maskingEventManager != null)
         {
-            eventLogger.LogStaircaseEvaluation(
-                "STAIRCASE_EVAL_START",
-                maskingEventManager,
-                currentTestThetaDeg,
-                false,
-                null,
-                currentStepDeg,
-                0f,
-                currentTestThetaDeg,
-                false,
-                0,
-                reversalThetas.Count
-            );
+            if (currentEvaluationTrialType == EvaluationTrialType.Normal)
+            {
+                eventLogger.LogStaircaseEvaluation(
+                    "STAIRCASE_EVAL_START",
+                    maskingEventManager,
+                    currentTestThetaDeg,
+                    false,
+                    null,
+                    currentStepDeg,
+                    0f,
+                    currentTestThetaDeg,
+                    false,
+                    0,
+                    reversalThetas.Count,
+                    "",
+                    "trialType=NORMAL"
+                );
+            }
+            else
+            {
+                eventLogger.LogCatchEvaluation(
+                    "CATCH_EVAL_START",
+                    maskingEventManager,
+                    GetTrialTypeLogName(currentEvaluationTrialType),
+                    currentPlannedThetaDeg,
+                    null,
+                    null,
+                    "",
+                    currentTestThetaDeg,
+                    "",
+                    BuildCatchRuntimeExtra()
+                );
+            }
         }
 
         if (debugLog)
         {
             Debug.Log(
-                $"[GainSearchFlowController] Staircase evaluation started. " +
-                $"Test={currentTestThetaDeg}, Step={currentStepDeg}, Pending={evaluationPending}, InProgress={evaluationInProgress}",
+                $"[GainSearchFlowController] Evaluation started. " +
+                $"TrialType={currentEvaluationTrialType}, PlannedTheta={currentPlannedThetaDeg:F2}, " +
+                $"HeldStaircaseTheta={currentTestThetaDeg:F2}, Step={currentStepDeg}, " +
+                $"Pending={evaluationPending}, InProgress={evaluationInProgress}",
                 this
             );
         }
@@ -347,7 +432,9 @@ public class GainSearchFlowController : MonoBehaviour
             return;
         }
 
-        float testThetaBeforeFinish = currentTestThetaDeg;
+        EvaluationTrialType trialTypeBeforeFinish = currentEvaluationTrialType;
+        float plannedThetaBeforeFinish = currentPlannedThetaDeg;
+        float staircaseThetaBeforeFinish = currentTestThetaDeg;
         bool noticedBeforeFinish = noticedDuringCurrentEvaluation;
 
         bool injectionActuallyStarted =
@@ -362,21 +449,39 @@ public class GainSearchFlowController : MonoBehaviour
 
             if (eventLogger != null && maskingEventManager != null)
             {
-                eventLogger.LogStaircaseEvaluation(
-                    "STAIRCASE_EVAL_FINISH",
-                    maskingEventManager,
-                    testThetaBeforeFinish,
-                    noticedBeforeFinish,
-                    false,
-                    currentStepDeg,
-                    0f,
-                    currentTestThetaDeg,
-                    false,
-                    0,
-                    reversalThetas.Count,
-                    "NO_INJECTION_STARTED",
-                    $"injectionOutcome={outcome};retrySameTheta=true"
-                );
+                if (trialTypeBeforeFinish == EvaluationTrialType.Normal)
+                {
+                    eventLogger.LogStaircaseEvaluation(
+                        "STAIRCASE_EVAL_FINISH",
+                        maskingEventManager,
+                        staircaseThetaBeforeFinish,
+                        noticedBeforeFinish,
+                        false,
+                        currentStepDeg,
+                        0f,
+                        currentTestThetaDeg,
+                        false,
+                        0,
+                        reversalThetas.Count,
+                        "NO_INJECTION_STARTED",
+                        $"trialType=NORMAL;injectionOutcome={outcome};retrySameTheta=true"
+                    );
+                }
+                else
+                {
+                    eventLogger.LogCatchEvaluation(
+                        "CATCH_EVAL_FINISH",
+                        maskingEventManager,
+                        GetTrialTypeLogName(trialTypeBeforeFinish),
+                        plannedThetaBeforeFinish,
+                        noticedBeforeFinish,
+                        false,
+                        "INVALID_RETRY",
+                        staircaseThetaBeforeFinish,
+                        "NO_INJECTION_STARTED",
+                        $"injectionOutcome={outcome};retrySameCatch=true;{BuildCatchRuntimeExtra()}"
+                    );
+                }
             }
 
             noticedDuringCurrentEvaluation = false;
@@ -389,11 +494,15 @@ public class GainSearchFlowController : MonoBehaviour
             if (participantFeedback != null)
                 participantFeedback.ResetState(true);
 
+            // Keep exactly the same planned normal/catch trial after an invalid event.
+            ApplyCurrentPlannedThetaToInjection();
+
             if (debugLog)
             {
                 Debug.LogWarning(
                     $"[GainSearchFlowController] Evaluation invalid: no injection started. " +
-                    $"Outcome={outcome}. Theta not updated.",
+                    $"TrialType={trialTypeBeforeFinish}, Outcome={outcome}. " +
+                    $"Staircase and catch schedule not updated.",
                     this
                 );
             }
@@ -401,7 +510,19 @@ public class GainSearchFlowController : MonoBehaviour
             return;
         }
 
-        ProcessValidStaircaseEvaluation(testThetaBeforeFinish, noticedBeforeFinish);
+        if (trialTypeBeforeFinish == EvaluationTrialType.Normal)
+        {
+            ProcessValidStaircaseEvaluation(staircaseThetaBeforeFinish, noticedBeforeFinish);
+        }
+        else
+        {
+            ProcessValidCatchEvaluation(
+                trialTypeBeforeFinish,
+                plannedThetaBeforeFinish,
+                staircaseThetaBeforeFinish,
+                noticedBeforeFinish
+            );
+        }
 
         noticedDuringCurrentEvaluation = false;
         evaluationInProgress = false;
@@ -410,11 +531,16 @@ public class GainSearchFlowController : MonoBehaviour
         autoFinishTime = -1f;
 
         if (phase != SearchPhase.Idle && phase != SearchPhase.Finished)
+        {
             evaluationPending = true;
+            PlanNextEvaluation();
+        }
         else
+        {
             evaluationPending = false;
+        }
 
-        ApplyCurrentTestThetaToInjection();
+        ApplyCurrentPlannedThetaToInjection();
 
         if (participantFeedback != null)
             participantFeedback.ResetState(true);
@@ -422,8 +548,10 @@ public class GainSearchFlowController : MonoBehaviour
         if (debugLog)
         {
             Debug.Log(
-                $"[GainSearchFlowController] Staircase evaluation finished. " +
-                $"Phase={phase}, Test={currentTestThetaDeg}, Step={currentStepDeg}, " +
+                $"[GainSearchFlowController] Evaluation finished. " +
+                $"CompletedType={trialTypeBeforeFinish}, Phase={phase}, " +
+                $"NextType={currentEvaluationTrialType}, NextPlannedTheta={currentPlannedThetaDeg:F2}, " +
+                $"StaircaseTheta={currentTestThetaDeg:F2}, Step={currentStepDeg}, " +
                 $"ValidTrials={validTrialCount}, Reversals={reversalThetas.Count}, " +
                 $"Pending={evaluationPending}, InProgress={evaluationInProgress}",
                 this
@@ -491,7 +619,9 @@ public class GainSearchFlowController : MonoBehaviour
         autoFinishScheduled = false;
         autoFinishTime = -1f;
 
-        ApplyCurrentTestThetaToInjection();
+        ResetCatchState();
+        PlanNextEvaluation();
+        ApplyCurrentPlannedThetaToInjection();
 
         if (participantFeedback != null)
             participantFeedback.ResetState(true);
@@ -535,6 +665,7 @@ public class GainSearchFlowController : MonoBehaviour
     private void ProcessValidStaircaseEvaluation(float testThetaBeforeFinish, bool noticedBeforeFinish)
     {
         validTrialCount++;
+        normalTrialsSinceLastCatch++;
 
         int deltaSign = noticedBeforeFinish ? -1 : 1;
         bool isReversal = Mathf.Abs(lastStaircaseDeltaDeg) > 0.0001f &&
@@ -567,7 +698,9 @@ public class GainSearchFlowController : MonoBehaviour
                 nextThetaDeg,
                 isReversal,
                 reversalIndex,
-                reversalThetas.Count
+                reversalThetas.Count,
+                "",
+                "trialType=NORMAL"
             );
 
             if (isReversal)
@@ -583,7 +716,9 @@ public class GainSearchFlowController : MonoBehaviour
                     nextThetaDeg,
                     true,
                     reversalIndex,
-                    reversalThetas.Count
+                    reversalThetas.Count,
+                    "",
+                    "trialType=NORMAL"
                 );
             }
         }
@@ -633,7 +768,9 @@ public class GainSearchFlowController : MonoBehaviour
                 reversalThetas.Count,
                 hasEstimatedThreshold && thresholdReliable,
                 stopReason,
-                $"thresholdReliable={thresholdReliable.ToString().ToLowerInvariant()};hasEstimatedThreshold={hasEstimatedThreshold.ToString().ToLowerInvariant()}"
+                $"thresholdReliable={thresholdReliable.ToString().ToLowerInvariant()};" +
+                $"hasEstimatedThreshold={hasEstimatedThreshold.ToString().ToLowerInvariant()};" +
+                BuildCatchSummaryExtra()
             );
         }
 
@@ -712,17 +849,209 @@ public class GainSearchFlowController : MonoBehaviour
         return Mathf.Clamp(theta, minThetaDeg, maxThetaDeg);
     }
 
-    private void ApplyCurrentTestThetaToInjection()
+    private void ResetCatchState()
     {
-        if (injectionController == null)
+        currentEvaluationTrialType = EvaluationTrialType.Normal;
+        currentPlannedThetaDeg = currentTestThetaDeg;
+
+        normalTrialsSinceLastCatch = 0;
+        catchSequenceIndex = 0;
+
+        zeroCatchCount = 0;
+        zeroCatchFalseAlarmCount = 0;
+        highCatchCount = 0;
+        highCatchHitCount = 0;
+
+        ScheduleNextCatchInterval();
+    }
+
+    private void PlanNextEvaluation()
+    {
+        currentEvaluationTrialType = EvaluationTrialType.Normal;
+        currentPlannedThetaDeg = currentTestThetaDeg;
+
+        if (!enableCatchEvents)
             return;
 
-        injectionController.SetCurrentEventThetaDeg(currentTestThetaDeg);
+        if (normalTrialsSinceLastCatch < nextCatchAfterNormalTrials)
+            return;
+
+        currentEvaluationTrialType = GetNextCatchType();
+        currentPlannedThetaDeg = currentEvaluationTrialType == EvaluationTrialType.CatchZero
+            ? 0f
+            : GetClampedHighCatchThetaDeg();
 
         if (debugLog)
         {
             Debug.Log(
-                $"[GainSearchFlowController] Applied test theta to injection controller: {currentTestThetaDeg}",
+                $"[GainSearchFlowController] Catch planned. " +
+                $"Type={currentEvaluationTrialType}, CatchTheta={currentPlannedThetaDeg:F2}, " +
+                $"HeldStaircaseTheta={currentTestThetaDeg:F2}, " +
+                $"ValidNormalSinceLastCatch={normalTrialsSinceLastCatch}, " +
+                $"ScheduledAfter={nextCatchAfterNormalTrials}",
+                this
+            );
+        }
+    }
+
+    private void ProcessValidCatchEvaluation(
+        EvaluationTrialType trialType,
+        float catchThetaDeg,
+        float heldStaircaseThetaDeg,
+        bool noticed
+    )
+    {
+        string catchOutcome;
+
+        if (trialType == EvaluationTrialType.CatchZero)
+        {
+            zeroCatchCount++;
+            if (noticed)
+            {
+                zeroCatchFalseAlarmCount++;
+                catchOutcome = "FALSE_ALARM";
+            }
+            else
+            {
+                catchOutcome = "CORRECT_REJECTION";
+            }
+        }
+        else
+        {
+            highCatchCount++;
+            if (noticed)
+            {
+                highCatchHitCount++;
+                catchOutcome = "HIT";
+            }
+            else
+            {
+                catchOutcome = "MISS";
+            }
+        }
+
+        if (eventLogger != null && maskingEventManager != null)
+        {
+            eventLogger.LogCatchEvaluation(
+                "CATCH_EVAL_FINISH",
+                maskingEventManager,
+                GetTrialTypeLogName(trialType),
+                catchThetaDeg,
+                noticed,
+                true,
+                catchOutcome,
+                heldStaircaseThetaDeg,
+                "",
+                BuildCatchRuntimeExtra()
+            );
+        }
+
+        if (debugLog)
+        {
+            Debug.Log(
+                $"[GainSearchFlowController] Catch completed. " +
+                $"Type={trialType}, Theta={catchThetaDeg:F2}, Noticed={noticed}, " +
+                $"Outcome={catchOutcome}. Staircase held at {heldStaircaseThetaDeg:F2}deg.",
+                this
+            );
+        }
+
+        // A valid catch consumes the catch slot but does NOT count as a valid
+        // staircase trial and does NOT change reversal state or staircase theta.
+        normalTrialsSinceLastCatch = 0;
+        catchSequenceIndex = (catchSequenceIndex + 1) % 3;
+        ScheduleNextCatchInterval();
+    }
+
+    private EvaluationTrialType GetNextCatchType()
+    {
+        // Repeating 2:1 pattern with a high catch appearing by the second catch:
+        // ZERO -> HIGH -> ZERO -> ZERO -> HIGH -> ZERO ...
+        switch (catchSequenceIndex % 3)
+        {
+            case 1:
+                return EvaluationTrialType.CatchHigh;
+            case 0:
+            case 2:
+            default:
+                return EvaluationTrialType.CatchZero;
+        }
+    }
+
+    private void ScheduleNextCatchInterval()
+    {
+        int minInterval = Mathf.Max(1, minNormalTrialsBetweenCatch);
+        int maxInterval = Mathf.Max(minInterval, maxNormalTrialsBetweenCatch);
+        nextCatchAfterNormalTrials = Random.Range(minInterval, maxInterval + 1);
+    }
+
+    private float GetClampedHighCatchThetaDeg()
+    {
+        float upper = Mathf.Max(0f, maxThetaDeg);
+        if (injectionController != null)
+            upper = Mathf.Min(upper, Mathf.Max(0f, injectionController.thetaHardMax));
+
+        return Mathf.Clamp(highCatchThetaDeg, 0f, upper);
+    }
+
+    private string GetTrialTypeLogName(EvaluationTrialType trialType)
+    {
+        switch (trialType)
+        {
+            case EvaluationTrialType.CatchZero:
+                return "CATCH_ZERO";
+            case EvaluationTrialType.CatchHigh:
+                return "CATCH_HIGH";
+            case EvaluationTrialType.Normal:
+            default:
+                return "NORMAL";
+        }
+    }
+
+    private string BuildCatchRuntimeExtra()
+    {
+        return
+            $"normalTrialsSinceLastCatch={normalTrialsSinceLastCatch};" +
+            $"nextCatchAfterNormalTrials={nextCatchAfterNormalTrials};" +
+            $"zeroCatchCount={zeroCatchCount};" +
+            $"zeroCatchFalseAlarmCount={zeroCatchFalseAlarmCount};" +
+            $"highCatchCount={highCatchCount};" +
+            $"highCatchHitCount={highCatchHitCount}";
+    }
+
+    private string BuildCatchSummaryExtra()
+    {
+        float falseAlarmRate = zeroCatchCount > 0
+            ? (float)zeroCatchFalseAlarmCount / zeroCatchCount
+            : 0f;
+
+        float highHitRate = highCatchCount > 0
+            ? (float)highCatchHitCount / highCatchCount
+            : 0f;
+
+        return
+            $"catchEventsEnabled={enableCatchEvents.ToString().ToLowerInvariant()};" +
+            $"zeroCatchCount={zeroCatchCount};" +
+            $"zeroCatchFalseAlarmCount={zeroCatchFalseAlarmCount};" +
+            $"zeroCatchFalseAlarmRate={FormatFloat(falseAlarmRate)};" +
+            $"highCatchCount={highCatchCount};" +
+            $"highCatchHitCount={highCatchHitCount};" +
+            $"highCatchHitRate={FormatFloat(highHitRate)}";
+    }
+
+    private void ApplyCurrentPlannedThetaToInjection()
+    {
+        if (injectionController == null)
+            return;
+
+        injectionController.SetCurrentEventThetaDeg(currentPlannedThetaDeg);
+
+        if (debugLog)
+        {
+            Debug.Log(
+                $"[GainSearchFlowController] Applied planned theta to injection controller: " +
+                $"TrialType={currentEvaluationTrialType}, PlannedTheta={currentPlannedThetaDeg:F2}, " +
+                $"HeldStaircaseTheta={currentTestThetaDeg:F2}",
                 this
             );
         }
