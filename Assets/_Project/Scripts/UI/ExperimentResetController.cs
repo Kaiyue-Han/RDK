@@ -33,6 +33,13 @@ public class ExperimentResetController : MonoBehaviour
     [SerializeField] private TrialFinishUIController resultUIController;
     [SerializeField] private EventLogger eventLogger;
 
+    [Header("Physical / Transient State")]
+    [SerializeField] private WalkingDetector walkingDetector;
+    [SerializeField] private PhysicalPositionTracker physicalPositionTracker;
+    [SerializeField] private PlayAreaRectProvider playAreaRectProvider;
+    [SerializeField] private RotationInjectionController injectionController;
+    [SerializeField] private ParticipantFeedbackController participantFeedback;
+
     [Header("Optional UI")]
     [SerializeField] private Button resetButton;
     [Tooltip("After reset, switch the experimenter UI back to the Settings tab.")]
@@ -190,6 +197,24 @@ public class ExperimentResetController : MonoBehaviour
             coinSequenceManager.ResetSequence();
 
         RestoreSceneTransforms();
+
+        // The participant physically returns to the designated origin before a
+        // full reset. Rebuild all physical baselines from that pose so the new run
+        // cannot inherit displacement, speed smoothing, or turn history.
+        if (physicalPositionTracker != null)
+            physicalPositionTracker.ResetTracker();
+
+        if (playAreaRectProvider != null)
+            playAreaRectProvider.ResetOrigin();
+
+        if (walkingDetector != null)
+            walkingDetector.ResetState();
+
+        if (injectionController != null)
+            injectionController.ResetDirectionCache();
+
+        if (participantFeedback != null)
+            participantFeedback.ResetState(false);
 
         if (worldRotator != null)
             worldRotator.ResetRuntimeState();

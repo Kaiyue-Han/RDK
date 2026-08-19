@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -36,11 +37,6 @@ public class RotationInjectionController : MonoBehaviour
     [Tooltip("Absolute signed turn angle below this value is treated as straight walking (degrees).")]
     public float straightAngleToleranceDeg = 8f;
 
-    [Header("Event timing")]
-    public float eventDuration = 0.9f;
-    [Range(0f, 1f)] public float injectAt = 0.5f;
-    public float injectWindowRatio = 0.55f;
-
     [Header("Debug")]
     public bool logDebug = true;
 
@@ -49,7 +45,9 @@ public class RotationInjectionController : MonoBehaviour
     [SerializeField] private string debugMovementCongruenceState = "NO_DATA";
 
     private bool active;
-    private float startTime;
+    private bool pendingWindowStart;
+    private MaskingEventManager.FormalEventTiming currentEventTiming;
+    private float actualInjectionStartTime = float.NaN;
     private float appliedAngle;
     private float signedTheta;
     private float cachedBaseYawRate;
@@ -71,7 +69,12 @@ public class RotationInjectionController : MonoBehaviour
     // GainSearchFlowController uses these states to decide whether the staircase
     // evaluation was valid. A skipped injection must not update theta.
     public bool CurrentEvaluationInjectionStarted { get; private set; } = false;
+    public bool CurrentEvaluationInjectionCompleted { get; private set; } = false;
     public string CurrentEvaluationInjectionOutcome { get; private set; } = "NONE";
+
+    public event Action<float> OnInjectionStarted;
+    public event Action<float> OnInjectionCompleted;
+    public event Action<float> OnIncompleteInjectionCancelled;
 
     public float CachedBaseYawRate => cachedBaseYawRate;
     public float LastSignedThetaDeg => signedTheta;
@@ -79,32 +82,50 @@ public class RotationInjectionController : MonoBehaviour
     public float DebugUserTurnSign => debugUserTurnSign;
     public float DebugUserTurnAngleDeg => debugUserTurnAngleDeg;
     public string DebugMovementCongruenceState => debugMovementCongruenceState;
+    public float ActualInjectionStartTime => actualInjectionStartTime;
+    public float WalkingSpeedAtInjectionMps { get; private set; }
+    public float AppliedAngleDeg => appliedAngle;
 
     private void Awake()
     {
         if (maskingEventManager != null)
         {
-            maskingEventManager.OnInjectPoint += OnInjectPoint;
-            eventDuration = maskingEventManager.occlusionSec;
-            injectAt = maskingEventManager.injectAt;
+            maskingEventManager.OnFormalEventStarted += HandleFormalEventStarted;
+            maskingEventManager.OnFormalEventEnding += HandleFormalEventEnding;
         }
     }
 
     private void OnDestroy()
     {
         if (maskingEventManager != null)
-            maskingEventManager.OnInjectPoint -= OnInjectPoint;
+        {
+            maskingEventManager.OnFormalEventStarted -= HandleFormalEventStarted;
+            maskingEventManager.OnFormalEventEnding -= HandleFormalEventEnding;
+        }
     }
 
     private void Update()
     {
         SamplePhysicalMovement();
+
+        if (
+            (active || pendingWindowStart) &&
+            walkingDetector != null &&
+            walkingDetector.IsControllerLocomotionActive
+        )
+        {
+            CancelActiveInjection("CANCELLED_ARTIFICIAL_LOCOMOTION", true);
+        }
     }
 
     public void BeginEvaluationInjectionTracking()
     {
+        CancelActiveInjection("NEW_EVALUATION", false);
         CurrentEvaluationInjectionStarted = false;
-        CurrentEvaluationInjectionOutcome = "WAITING_FOR_INJECT_POINT";
+        CurrentEvaluationInjectionCompleted = false;
+        CurrentEvaluationInjectionOutcome = "WAITING_FOR_EVENT";
+        actualInjectionStartTime = float.NaN;
+        WalkingSpeedAtInjectionMps = 0f;
     }
 
     /// <summary>
@@ -166,153 +187,189 @@ public class RotationInjectionController : MonoBehaviour
         return true;
     }
 
-    private void OnInjectPoint()
+    private void HandleFormalEventStarted(MaskingEventManager.FormalEventTiming timing)
     {
-        CurrentEvaluationInjectionStarted = false;
-        CurrentEvaluationInjectionOutcome = "AT_INJECT_POINT";
-
-        if (maskingEventManager != null)
-        {
-            eventDuration = maskingEventManager.occlusionSec;
-            injectAt = maskingEventManager.injectAt;
-        }
-
-        // 1) Injection disabled.
-        if (!enableInjection)
-        {
-            CurrentEvaluationInjectionOutcome = "SKIPPED_DISABLED";
-            LogInjectionEvent("INJECTION_SKIPPED_DISABLED", 0f);
-
-            if (logDebug)
-                Debug.Log("[Inject] skipped: injection disabled");
-
-            return;
-        }
-
-        // 2) The participant must still be walking at the actual injection point.
-        if (walkingDetector != null && !walkingDetector.IsWalking)
-        {
-            CurrentEvaluationInjectionOutcome = "SKIPPED_NOT_WALKING";
-            LogInjectionEvent("INJECTION_SKIPPED_NOT_WALKING", 0f);
-
-            if (logDebug)
-                Debug.Log("[Inject] skipped: not walking at inject point");
-
-            return;
-        }
-
-        // 3) The event injection may only enlarge the CURRENT base redirection.
-        // No cached or old direction is allowed.
-        if (!TryGetCurrentBaseSign(out float baseSign))
-        {
-            CurrentEvaluationInjectionOutcome = "SKIPPED_NO_CURRENT_BASE_DIRECTION";
-            LogInjectionEvent("INJECTION_SKIPPED_NO_CURRENT_BASE_DIRECTION", 0f);
-
-            if (logDebug)
-            {
-                Debug.Log(
-                    $"[Inject] skipped: no current base direction. " +
-                    $"cachedBaseYawRate={cachedBaseYawRate:F2}, " +
-                    $"requiredMagnitude={minBaseYawRateForInjection:F2}"
-                );
-            }
-
-            return;
-        }
-
-        // 4) Main experimental gate.
-        // Straight physical walking is accepted.
-        // A physical turn with the same sign as base steering is accepted.
-        // An opposite physical turn is excluded from this experiment.
-        if (!PassUserMovementCongruenceGate(baseSign, out string congruenceReason))
-        {
-            if (congruenceReason == "OPPOSITE_USER_TURN")
-            {
-                CurrentEvaluationInjectionOutcome = "SKIPPED_OPPOSITE_USER_TURN";
-                LogInjectionEvent("INJECTION_SKIPPED_OPPOSITE_USER_TURN", 0f);
-            }
-            else
-            {
-                CurrentEvaluationInjectionOutcome = "SKIPPED_NO_RELIABLE_USER_TURN";
-                LogInjectionEvent("INJECTION_SKIPPED_NO_RELIABLE_USER_TURN", 0f);
-            }
-
-            if (logDebug)
-            {
-                Debug.Log(
-                    $"[Inject] skipped: user movement not congruent/reliable. " +
-                    $"reason={congruenceReason}, baseSign={baseSign:F0}, " +
-                    $"userTurnSign={debugUserTurnSign:F0}, " +
-                    $"userTurnAngle={debugUserTurnAngleDeg:F1}deg"
-                );
-            }
-
-            return;
-        }
-
-        // 5) All gates passed. Add the experiment theta in the current base direction.
-        float theta = Mathf.Clamp(currentEventThetaDeg, 0f, thetaHardMax);
-        signedTheta = theta * baseSign;
-
-        active = true;
-        startTime = Time.time;
+        CancelActiveInjection("EVENT_RESTARTED", false);
+        currentEventTiming = timing;
+        pendingWindowStart = true;
+        active = false;
         appliedAngle = 0f;
+        signedTheta = 0f;
+        actualInjectionStartTime = float.NaN;
+        WalkingSpeedAtInjectionMps = 0f;
+        CurrentEvaluationInjectionStarted = false;
+        CurrentEvaluationInjectionCompleted = false;
+        CurrentEvaluationInjectionOutcome = "WAITING_FOR_INJECTION_WINDOW";
+    }
 
-        CurrentEvaluationInjectionStarted = true;
-        CurrentEvaluationInjectionOutcome = "STARTED";
+    private void HandleFormalEventEnding()
+    {
+        if (CurrentEvaluationInjectionCompleted)
+            return;
 
-        LogInjectionEvent("INJECTION_START", signedTheta);
-
-        if (logDebug)
+        if (active)
         {
-            Debug.Log(
-                $"[Inject] started: thetaSigned={signedTheta:F1}, " +
-                $"currentBaseYawRate={cachedBaseYawRate:F2}, " +
-                $"baseSign={baseSign:F0}, " +
-                $"userTurnSign={debugUserTurnSign:F0}, " +
-                $"userTurnAngle={debugUserTurnAngleDeg:F1}deg, " +
-                $"congruence={debugMovementCongruenceState}"
-            );
+            CancelActiveInjection("INCOMPLETE_AT_EVENT_END", true);
+            return;
+        }
+
+        if (pendingWindowStart)
+        {
+            pendingWindowStart = false;
+            CurrentEvaluationInjectionOutcome = "SKIPPED_EVENT_ENDED_BEFORE_WINDOW";
+            LogInjectionEvent("INJECTION_SKIPPED_EVENT_ENDED_BEFORE_WINDOW", 0f);
         }
     }
 
     public float ComputeEventYawRate(float dt)
     {
+        float now = Time.time;
+
+        if (pendingWindowStart && now >= currentEventTiming.InjectionWindowStartTime)
+        {
+            pendingWindowStart = false;
+
+            if (now >= currentEventTiming.InjectionWindowEndTime)
+            {
+                CurrentEvaluationInjectionOutcome = "SKIPPED_MISSED_INJECTION_WINDOW";
+                LogInjectionEvent("INJECTION_SKIPPED_MISSED_WINDOW", 0f);
+            }
+            else
+            {
+                TryStartInjection(now);
+            }
+        }
+
         if (!enableInjection || !active)
             return 0f;
 
-        float t = Time.time - startTime;
-        if (t >= eventDuration)
+        float windowEnd = currentEventTiming.InjectionWindowEndTime;
+        if (now >= windowEnd)
         {
-            active = false;
+            // Do not apply a delayed remainder outside the authoritative window.
+            // This can only occur after an execution interruption; the evaluation
+            // is invalidated and retried instead of contaminating the timing.
+            CancelActiveInjection("INCOMPLETE_AT_INJECTION_WINDOW_END", true);
             return 0f;
         }
 
-        float windowDuration = eventDuration * injectWindowRatio;
-        float windowMidpoint = eventDuration * injectAt;
-        float t0 = Mathf.Clamp(windowMidpoint - windowDuration * 0.5f, 0f, eventDuration);
-        float t1 = Mathf.Clamp(windowMidpoint + windowDuration * 0.5f, 0f, eventDuration);
-
-        float targetAppliedAngle;
-        if (t <= t0)
-        {
-            targetAppliedAngle = 0f;
-        }
-        else if (t >= t1)
-        {
-            targetAppliedAngle = signedTheta;
-        }
-        else
-        {
-            float u = (t - t0) / Mathf.Max(t1 - t0, 1e-4f);
-            u = SmoothStep01(u);
-            targetAppliedAngle = signedTheta * u;
-        }
+        float interpolationDuration = Mathf.Max(
+            windowEnd - actualInjectionStartTime,
+            1e-4f
+        );
+        // Apply the integrated angle for the current frame interval. If this frame
+        // crosses the window boundary, it receives the exact remaining angle now,
+        // so no later frame can inject outside the window.
+        float sampleTime = Mathf.Min(now + Mathf.Max(dt, 0f), windowEnd);
+        float u = Mathf.Clamp01(
+            (sampleTime - actualInjectionStartTime) / interpolationDuration
+        );
+        float targetAppliedAngle = signedTheta * SmoothStep01(u);
 
         float deltaAngle = targetAppliedAngle - appliedAngle;
         appliedAngle = targetAppliedAngle;
 
+        if (Mathf.Abs(appliedAngle - signedTheta) <= 0.0001f)
+            CompleteInjection(sampleTime);
+
         return deltaAngle / Mathf.Max(dt, 1e-4f);
+    }
+
+    private void TryStartInjection(float now)
+    {
+        if (!enableInjection)
+        {
+            CurrentEvaluationInjectionOutcome = "SKIPPED_DISABLED";
+            LogInjectionEvent("INJECTION_SKIPPED_DISABLED", 0f);
+            return;
+        }
+
+        if (walkingDetector != null && !walkingDetector.IsWalking)
+        {
+            CurrentEvaluationInjectionOutcome = "SKIPPED_NOT_WALKING";
+            LogInjectionEvent("INJECTION_SKIPPED_NOT_WALKING", 0f);
+            return;
+        }
+
+        if (!TryGetCurrentBaseSign(out float baseSign))
+        {
+            CurrentEvaluationInjectionOutcome = "SKIPPED_NO_CURRENT_BASE_DIRECTION";
+            LogInjectionEvent("INJECTION_SKIPPED_NO_CURRENT_BASE_DIRECTION", 0f);
+            return;
+        }
+
+        if (!PassUserMovementCongruenceGate(baseSign, out string congruenceReason))
+        {
+            bool opposite = congruenceReason == "OPPOSITE_USER_TURN";
+            CurrentEvaluationInjectionOutcome = opposite
+                ? "SKIPPED_OPPOSITE_USER_TURN"
+                : "SKIPPED_NO_RELIABLE_USER_TURN";
+            LogInjectionEvent(
+                opposite
+                    ? "INJECTION_SKIPPED_OPPOSITE_USER_TURN"
+                    : "INJECTION_SKIPPED_NO_RELIABLE_USER_TURN",
+                0f
+            );
+            return;
+        }
+
+        signedTheta = Mathf.Clamp(currentEventThetaDeg, 0f, thetaHardMax) * baseSign;
+        active = true;
+        actualInjectionStartTime = now;
+        appliedAngle = 0f;
+        WalkingSpeedAtInjectionMps = walkingDetector != null
+            ? Mathf.Max(0f, walkingDetector.SmoothedSpeed)
+            : 0f;
+
+        CurrentEvaluationInjectionStarted = true;
+        CurrentEvaluationInjectionOutcome = "STARTED";
+        OnInjectionStarted?.Invoke(actualInjectionStartTime);
+        LogInjectionEvent("INJECTION_START", signedTheta);
+
+        if (Mathf.Abs(signedTheta) <= 0.0001f)
+            CompleteInjection(now);
+    }
+
+    private void CompleteInjection(float completionTime)
+    {
+        if (!active && CurrentEvaluationInjectionCompleted)
+            return;
+
+        active = false;
+        pendingWindowStart = false;
+        appliedAngle = signedTheta;
+        CurrentEvaluationInjectionCompleted = true;
+        CurrentEvaluationInjectionOutcome = "COMPLETED";
+        FormalExperimentContext.RecordAppliedTheta(appliedAngle);
+        LogInjectionEvent("INJECTION_COMPLETE", signedTheta);
+        OnInjectionCompleted?.Invoke(completionTime);
+    }
+
+    public void CancelActiveInjection(string reason = "CANCELLED", bool logCancellation = true)
+    {
+        bool hadActiveState = active || pendingWindowStart;
+        float cancelledAppliedAngle = appliedAngle;
+        active = false;
+        pendingWindowStart = false;
+
+        if (!CurrentEvaluationInjectionCompleted && hadActiveState)
+        {
+            CurrentEvaluationInjectionOutcome = string.IsNullOrEmpty(reason)
+                ? "CANCELLED"
+                : reason;
+            FormalExperimentContext.RecordAppliedTheta(appliedAngle);
+
+            if (logCancellation)
+                LogInjectionEvent("INJECTION_CANCELLED", signedTheta);
+
+            // Any partial event rotation belongs only to this invalid evaluation.
+            // WorldRotator owns the inverse transform so it can remove that
+            // contribution immediately without touching continuous base steering.
+            if (Mathf.Abs(cancelledAppliedAngle) > 0.0001f)
+                OnIncompleteInjectionCancelled?.Invoke(cancelledAppliedAngle);
+
+            appliedAngle = 0f;
+        }
     }
 
     private static float SmoothStep01(float x)
@@ -525,11 +582,16 @@ public class RotationInjectionController : MonoBehaviour
 
     public void ResetDirectionCache()
     {
+        CancelActiveInjection("RESET", false);
         cachedBaseYawRate = 0f;
 
         active = false;
+        pendingWindowStart = false;
+        currentEventTiming = default;
         appliedAngle = 0f;
         signedTheta = 0f;
+        actualInjectionStartTime = float.NaN;
+        WalkingSpeedAtInjectionMps = 0f;
 
         movementSamples.Clear();
         debugUserTurnSign = 0f;
@@ -537,6 +599,7 @@ public class RotationInjectionController : MonoBehaviour
         debugMovementCongruenceState = "RESET";
 
         CurrentEvaluationInjectionStarted = false;
+        CurrentEvaluationInjectionCompleted = false;
         CurrentEvaluationInjectionOutcome = "RESET";
 
         if (logDebug)
@@ -557,7 +620,8 @@ public class RotationInjectionController : MonoBehaviour
             cachedBaseYawRate,
             injectionSign,
             value,
-            CurrentEvaluationInjectionOutcome
+            CurrentEvaluationInjectionOutcome,
+            appliedAngle
         );
     }
 }

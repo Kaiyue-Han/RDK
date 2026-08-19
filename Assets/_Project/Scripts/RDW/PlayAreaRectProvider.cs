@@ -21,7 +21,12 @@ public class PlayAreaRectProvider : MonoBehaviour
     private void Start()
     {
         if (lockCenterAtStart)
-            CenterXZ = GetHmdXZ();
+            ResetOrigin();
+    }
+
+    public void ResetOrigin()
+    {
+        CenterXZ = GetHmdXZ();
     }
 
     /// <summary>

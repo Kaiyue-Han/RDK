@@ -7,13 +7,14 @@ using UnityEngine.SceneManagement;
 public class EventLogger : MonoBehaviour
 {
     private const string Header =
-        "utc,mark,sceneName,conditionKey,anchorMode,motionMode,occluderName,occlusionRatio,timeSec,success,testThetaDeg,noticed,validTrial,invalidReason,currentStepDeg,staircaseDeltaDeg,nextThetaDeg,isReversal,reversalIndex,reversalCount,estimatedThresholdDeg,usedReversals,allReversals,baseYawRateAtInjection,injectionSign,signedInjectedThetaDeg,injectionOutcome,resetReason,extra";
+        "utc,mark,participant_id,session_id,run_id,trial_id,evaluation_id,trial_type,is_catch,catch_type,requested_theta_deg,event_start_time_sec,injection_start_time_sec,response_deadline_time_sec,response_time_sec,response_rt_sec,response_accepted,walking_speed_trigger_mps,walking_speed_injection_mps,user_turn_congruency,actual_applied_theta_deg,sceneName,conditionKey,anchorMode,motionMode,occluderName,occlusionRatio,timeSec,success,testThetaDeg,noticed,validTrial,invalidReason,currentStepDeg,staircaseDeltaDeg,nextThetaDeg,isReversal,reversalIndex,reversalCount,estimatedThresholdDeg,usedReversals,allReversals,baseYawRateAtInjection,injectionSign,signedInjectedThetaDeg,injectionOutcome,resetReason,extra";
 
     private string csvPath;
 
     private struct LogRow
     {
         public string mark;
+        public string actualAppliedThetaDeg;
         public string sceneName;
         public string conditionKey;
         public string anchorMode;
@@ -75,7 +76,8 @@ public class EventLogger : MonoBehaviour
         float baseYawRateAtInjection,
         float injectionSign,
         float signedInjectedThetaDeg,
-        string injectionOutcome = ""
+        string injectionOutcome = "",
+        float actualAppliedThetaDeg = float.NaN
     )
     {
         LogRow row = CreateConditionRow(mark, maskingEventManager);
@@ -83,7 +85,25 @@ public class EventLogger : MonoBehaviour
         row.injectionSign = FormatFloat(injectionSign);
         row.signedInjectedThetaDeg = FormatFloat(signedInjectedThetaDeg);
         row.injectionOutcome = injectionOutcome;
+        row.actualAppliedThetaDeg = float.IsNaN(actualAppliedThetaDeg)
+            ? ""
+            : FormatFloat(actualAppliedThetaDeg);
         row.extra = value != signedInjectedThetaDeg ? $"legacyValue={FormatFloat(value)}" : "";
+        WriteRow(row);
+    }
+
+    public void LogParticipantResponse(
+        MaskingEventManager maskingEventManager,
+        bool noticed,
+        float responseTime,
+        float responseTimeFromInjectionSec
+    )
+    {
+        LogRow row = CreateConditionRow("RESPONSE_ACCEPTED", maskingEventManager);
+        row.noticed = BoolString(noticed);
+        row.extra =
+            $"responseTime={FormatFloat(responseTime)};" +
+            $"responseTimeFromInjectionSec={FormatFloat(responseTimeFromInjectionSec)}";
         WriteRow(row);
     }
 
@@ -217,6 +237,29 @@ public class EventLogger : MonoBehaviour
         {
             utc,
             row.mark,
+            FormalExperimentContext.ParticipantId,
+            FormalExperimentContext.SessionId,
+            FormalExperimentContext.RunId,
+            FormalExperimentContext.TrialId,
+            FormalExperimentContext.EvaluationId,
+            FormalExperimentContext.TrialType,
+            BoolString(FormalExperimentContext.IsCatch),
+            FormalExperimentContext.CatchType,
+            OptionalFloat(FormalExperimentContext.RequestedThetaDeg),
+            OptionalFloat(FormalExperimentContext.EventStartTime),
+            OptionalFloat(FormalExperimentContext.InjectionStartTime),
+            OptionalFloat(FormalExperimentContext.ResponseDeadlineTime),
+            OptionalFloat(FormalExperimentContext.ResponseTime),
+            OptionalFloat(FormalExperimentContext.ResponseRtSec),
+            FormalExperimentContext.ResponseAccepted.HasValue
+                ? BoolString(FormalExperimentContext.ResponseAccepted.Value)
+                : "",
+            OptionalFloat(FormalExperimentContext.WalkingSpeedAtTriggerMps),
+            OptionalFloat(FormalExperimentContext.WalkingSpeedAtInjectionMps),
+            FormalExperimentContext.UserTurnCongruency,
+            string.IsNullOrEmpty(row.actualAppliedThetaDeg)
+                ? OptionalFloat(FormalExperimentContext.ActualAppliedThetaDeg)
+                : row.actualAppliedThetaDeg,
             row.sceneName,
             row.conditionKey,
             row.anchorMode,
@@ -317,6 +360,11 @@ public class EventLogger : MonoBehaviour
         return value.ToString("F3", CultureInfo.InvariantCulture);
     }
 
+    private static string OptionalFloat(float value)
+    {
+        return float.IsNaN(value) ? "" : FormatFloat(value);
+    }
+
     private static string BoolString(bool value)
     {
         return value ? "true" : "false";
@@ -329,5 +377,215 @@ public class EventLogger : MonoBehaviour
         if (string.IsNullOrEmpty(b))
             return a ?? "";
         return $"{a};{b}";
+    }
+}
+
+/// <summary>
+/// Process-persistent provenance and timing for the formal experiment. The launcher
+/// configures participant/session scope, each staircase start creates a run, each
+/// planned normal/catch item creates a trial, and every actual trigger attempt creates
+/// a distinct evaluation. Invalid attempts retain the trial id but receive a new
+/// evaluation id when retried.
+/// </summary>
+public static class FormalExperimentContext
+{
+    public static bool IsSessionConfigured { get; private set; }
+    public static string ParticipantId { get; private set; } = "";
+    public static string SessionId { get; private set; } = "";
+    public static string RunId { get; private set; } = "";
+    public static string TrialId { get; private set; } = "";
+    public static string EvaluationId { get; private set; } = "";
+    public static string TrialType { get; private set; } = "";
+    public static bool IsCatch { get; private set; }
+    public static string CatchType { get; private set; } = "";
+    public static float RequestedThetaDeg { get; private set; } = float.NaN;
+    public static float EventStartTime { get; private set; } = float.NaN;
+    public static float InjectionStartTime { get; private set; } = float.NaN;
+    public static float ResponseDeadlineTime { get; private set; } = float.NaN;
+    public static float ResponseTime { get; private set; } = float.NaN;
+    public static float ResponseRtSec { get; private set; } = float.NaN;
+    public static bool? ResponseAccepted { get; private set; }
+    public static float WalkingSpeedAtTriggerMps { get; private set; } = float.NaN;
+    public static float WalkingSpeedAtInjectionMps { get; private set; } = float.NaN;
+    public static string UserTurnCongruency { get; private set; } = "";
+    public static float ActualAppliedThetaDeg { get; private set; } = float.NaN;
+
+    private static int runCounter;
+    private static int trialCounter;
+    private static int evaluationCounter;
+    private static bool trialOpen;
+
+    public static bool TryConfigureSession(string participantId, string sessionId, out string error)
+    {
+        string cleanParticipant = SanitizeIdentifier(participantId);
+        if (string.IsNullOrEmpty(cleanParticipant))
+        {
+            error = "participant_id is required and may contain letters, digits, '-' or '_'.";
+            return false;
+        }
+
+        string cleanSession = SanitizeIdentifier(sessionId);
+        if (string.IsNullOrEmpty(cleanSession))
+            cleanSession = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+
+        bool changed = !IsSessionConfigured ||
+                       ParticipantId != cleanParticipant ||
+                       SessionId != cleanSession;
+
+        ParticipantId = cleanParticipant;
+        SessionId = cleanSession;
+        IsSessionConfigured = true;
+        error = "";
+
+        if (changed)
+        {
+            runCounter = 0;
+            ResetRunScope();
+        }
+
+        return true;
+    }
+
+    public static bool BeginRun()
+    {
+        if (!IsSessionConfigured)
+            return false;
+
+        runCounter++;
+        RunId = $"R{runCounter:000}";
+        trialCounter = 0;
+        evaluationCounter = 0;
+        trialOpen = false;
+        ClearEvaluationData(true);
+        return true;
+    }
+
+    public static bool BeginEvaluation(string trialType, float requestedThetaDeg, float triggerSpeedMps)
+    {
+        if (string.IsNullOrEmpty(RunId))
+            return false;
+
+        if (!trialOpen)
+        {
+            trialCounter++;
+            TrialId = $"{RunId}-T{trialCounter:000}";
+            trialOpen = true;
+        }
+
+        evaluationCounter++;
+        EvaluationId = $"{RunId}-E{evaluationCounter:000}";
+        TrialType = trialType ?? "";
+        IsCatch = TrialType == "CATCH_ZERO" || TrialType == "CATCH_HIGH";
+        CatchType = TrialType == "CATCH_ZERO"
+            ? "Zero"
+            : TrialType == "CATCH_HIGH" ? "High" : "";
+        RequestedThetaDeg = requestedThetaDeg;
+        WalkingSpeedAtTriggerMps = Mathf.Max(0f, triggerSpeedMps);
+        ClearTimingAndResponseData();
+        return true;
+    }
+
+    public static void RecordEventStart(float time)
+    {
+        EventStartTime = time;
+    }
+
+    public static void RecordInjectionStart(
+        float time,
+        float responseDeadline,
+        float walkingSpeedMps,
+        string congruency
+    )
+    {
+        InjectionStartTime = time;
+        ResponseDeadlineTime = responseDeadline;
+        WalkingSpeedAtInjectionMps = Mathf.Max(0f, walkingSpeedMps);
+        UserTurnCongruency = congruency ?? "";
+    }
+
+    public static void RecordResponse(float time, bool accepted)
+    {
+        ResponseTime = time;
+        ResponseAccepted = accepted;
+        ResponseRtSec = float.IsNaN(InjectionStartTime)
+            ? float.NaN
+            : Mathf.Max(0f, time - InjectionStartTime);
+    }
+
+    public static void RecordNoResponse()
+    {
+        ResponseAccepted = false;
+        ResponseTime = float.NaN;
+        ResponseRtSec = float.NaN;
+    }
+
+    public static void RecordAppliedTheta(float appliedThetaDeg)
+    {
+        ActualAppliedThetaDeg = appliedThetaDeg;
+    }
+
+    public static void CompleteTrial()
+    {
+        trialOpen = false;
+    }
+
+    public static void EndRun()
+    {
+        ResetRunScope();
+    }
+
+    private static void ResetRunScope()
+    {
+        RunId = "";
+        trialCounter = 0;
+        evaluationCounter = 0;
+        trialOpen = false;
+        ClearEvaluationData(true);
+    }
+
+    private static void ClearEvaluationData(bool clearTrialId)
+    {
+        if (clearTrialId)
+            TrialId = "";
+
+        EvaluationId = "";
+        TrialType = "";
+        IsCatch = false;
+        CatchType = "";
+        RequestedThetaDeg = float.NaN;
+        WalkingSpeedAtTriggerMps = float.NaN;
+        ClearTimingAndResponseData();
+    }
+
+    private static void ClearTimingAndResponseData()
+    {
+        EventStartTime = float.NaN;
+        InjectionStartTime = float.NaN;
+        ResponseDeadlineTime = float.NaN;
+        ResponseTime = float.NaN;
+        ResponseRtSec = float.NaN;
+        ResponseAccepted = null;
+        WalkingSpeedAtInjectionMps = float.NaN;
+        UserTurnCongruency = "";
+        ActualAppliedThetaDeg = float.NaN;
+    }
+
+    private static string SanitizeIdentifier(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "";
+
+        char[] source = value.Trim().ToCharArray();
+        char[] target = new char[source.Length];
+        int count = 0;
+
+        for (int i = 0; i < source.Length; i++)
+        {
+            char c = source[i];
+            if (char.IsLetterOrDigit(c) || c == '-' || c == '_')
+                target[count++] = c;
+        }
+
+        return count == 0 ? "" : new string(target, 0, count);
     }
 }

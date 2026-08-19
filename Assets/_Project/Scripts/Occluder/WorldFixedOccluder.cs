@@ -1,4 +1,4 @@
-using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 
 public class WorldFixedOccluder : MonoBehaviour, IOccluder
@@ -39,7 +39,11 @@ public class WorldFixedOccluder : MonoBehaviour, IOccluder
     [Header("Runtime")]
     [SerializeField] private bool hideOnAwake = true;
 
-    private Coroutine playCo;
+    private bool spatialMotionEnabled;
+    private readonly List<Transform> staticAnimationRoots = new List<Transform>();
+    private readonly List<Vector3> staticAnimationRootPositions = new List<Vector3>();
+    private readonly List<Transform> staticRotationRoots = new List<Transform>();
+    private readonly List<Quaternion> staticRootRotations = new List<Quaternion>();
 
     public bool IsPlaying { get; private set; }
 
@@ -53,17 +57,6 @@ public class WorldFixedOccluder : MonoBehaviour, IOccluder
 
     public void Show(int ratio, float durationSec)
     {
-        if (playCo != null)
-        {
-            StopCoroutine(playCo);
-            playCo = null;
-        }
-
-        playCo = StartCoroutine(PlayOcclusion(ratio, durationSec));
-    }
-
-    private IEnumerator PlayOcclusion(int ratio, float durationSec)
-    {
         IsPlaying = true;
 
         PlaceOnceFromCurrentHmdPose();
@@ -76,12 +69,83 @@ public class WorldFixedOccluder : MonoBehaviour, IOccluder
         if (activeObj) activeObj.SetActive(true);
 
         if (playLegacyAnimations && activeObj)
+        {
+            if (!spatialMotionEnabled)
+                CaptureStaticAnimationAnchors(activeObj);
+
             PlayLegacyAnimations(activeObj, durationSec);
+        }
+    }
 
-        if (durationSec > 0f)
-            yield return new WaitForSeconds(durationSec);
+    /// <summary>
+    /// Static and Dynamic formal conditions share the same butterfly visuals.
+    /// Only the Dynamic condition enables the legacy spatial group animation.
+    /// The MaskingEventManager remains the sole owner of the event end time.
+    /// </summary>
+    public void SetSpatialMotionEnabled(bool enabled)
+    {
+        spatialMotionEnabled = enabled;
+    }
 
-        Hide();
+    private void LateUpdate()
+    {
+        if (!IsPlaying || spatialMotionEnabled)
+            return;
+
+        // Preserve the authored per-butterfly layout while still allowing the
+        // clip's descendant wing/body animation to run.
+        int count = Mathf.Min(staticAnimationRoots.Count, staticAnimationRootPositions.Count);
+        for (int i = 0; i < count; i++)
+        {
+            if (staticAnimationRoots[i] != null)
+                staticAnimationRoots[i].localPosition = staticAnimationRootPositions[i];
+        }
+
+        int rotationCount = Mathf.Min(staticRotationRoots.Count, staticRootRotations.Count);
+        for (int i = 0; i < rotationCount; i++)
+        {
+            if (staticRotationRoots[i] != null)
+                staticRotationRoots[i].localRotation = staticRootRotations[i];
+        }
+    }
+
+    private void CaptureStaticAnimationAnchors(GameObject root)
+    {
+        staticAnimationRoots.Clear();
+        staticAnimationRootPositions.Clear();
+        staticRotationRoots.Clear();
+        staticRootRotations.Clear();
+
+        Animation[] animations = root.GetComponentsInChildren<Animation>(true);
+        foreach (Animation anim in animations)
+        {
+            if (anim == null)
+                continue;
+
+            CaptureStaticPosition(anim.transform);
+            CaptureStaticRotation(anim.transform);
+
+            Transform butterflyGroup = anim.transform.Find("butterfly_gruppe");
+            CaptureStaticPosition(butterflyGroup);
+        }
+    }
+
+    private void CaptureStaticPosition(Transform target)
+    {
+        if (target == null)
+            return;
+
+        staticAnimationRoots.Add(target);
+        staticAnimationRootPositions.Add(target.localPosition);
+    }
+
+    private void CaptureStaticRotation(Transform target)
+    {
+        if (target == null)
+            return;
+
+        staticRotationRoots.Add(target);
+        staticRootRotations.Add(target.localRotation);
     }
 
     private void PlaceOnceFromCurrentHmdPose()
@@ -174,17 +238,15 @@ public class WorldFixedOccluder : MonoBehaviour, IOccluder
 
     public void Hide()
     {
-        if (playCo != null)
-        {
-            StopCoroutine(playCo);
-            playCo = null;
-        }
-
         StopLegacyAnimations();
 
         if (visual40) visual40.SetActive(false);
         if (visual70) visual70.SetActive(false);
 
+        staticAnimationRoots.Clear();
+        staticAnimationRootPositions.Clear();
+        staticRotationRoots.Clear();
+        staticRootRotations.Clear();
         IsPlaying = false;
     }
 
@@ -194,6 +256,8 @@ public class WorldFixedOccluder : MonoBehaviour, IOccluder
         foreach (Animation anim in animations)
         {
             if (!anim) continue;
+            anim.Rewind();
+            anim.Sample();
             anim.Stop();
         }
     }

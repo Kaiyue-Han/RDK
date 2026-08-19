@@ -6,6 +6,7 @@ public class ExperimentTrialController : MonoBehaviour
     [SerializeField] private MaskingEventManager maskingEventManager;
     [SerializeField] private GainSearchFlowController searchFlowController;
     [SerializeField] private EventLogger eventLogger;
+    [SerializeField] private WorldRotator worldRotator;
 
     [Header("Optional UI Lock")]
     [SerializeField] private ExperimentUIController experimentUIController;
@@ -19,6 +20,10 @@ public class ExperimentTrialController : MonoBehaviour
 
     [Header("Abort Hold")]
     [SerializeField] private float abortHoldSec = 3f;
+
+    [Header("Formal Run")]
+    [Tooltip("Formal runs disable Pause/Resume. Use Abort when a participant cannot continue.")]
+    [SerializeField] private bool formalRunMode = true;
 
     [Header("Debug")]
     [SerializeField] private bool debugLog = true;
@@ -108,7 +113,11 @@ public class ExperimentTrialController : MonoBehaviour
     private void HandleXRInputs()
     {
         // X button: toggle pause/resume
-        if (pauseResumeInput != null && pauseResumeInput.PressedThisFrame())
+        if (
+            !formalRunMode &&
+            pauseResumeInput != null &&
+            pauseResumeInput.PressedThisFrame()
+        )
         {
             if (trialPaused)
                 ResumeCurrentTrial();
@@ -170,6 +179,21 @@ public class ExperimentTrialController : MonoBehaviour
         if (!maskingEventManager.IsTrialConfigured)
         {
             Debug.LogWarning("[ExperimentTrialController] Cannot start trial: current condition is not configured.");
+            return;
+        }
+
+        if (trialRunning || trialPaused)
+        {
+            Debug.LogWarning("[ExperimentTrialController] A formal run is already active.", this);
+            return;
+        }
+
+        if (!FormalExperimentContext.BeginRun())
+        {
+            Debug.LogError(
+                "[ExperimentTrialController] Cannot start formal run: participant/session IDs are not configured in the launcher.",
+                this
+            );
             return;
         }
 
@@ -241,6 +265,9 @@ public class ExperimentTrialController : MonoBehaviour
             );
         }
 
+        if (worldRotator != null)
+            worldRotator.AbortCurrentInjectionAndRollback("ABORTED");
+
         if (searchFlowController != null)
             searchFlowController.StopSearch("ABORTED");
 
@@ -262,10 +289,19 @@ public class ExperimentTrialController : MonoBehaviour
         {
             experimentUIController.SetUIInteractable(true);
         }
+
+        FormalExperimentContext.EndRun();
     }
 
     public void PauseCurrentTrial()
     {
+        if (formalRunMode)
+        {
+            if (debugLog)
+                Debug.Log("[ExperimentTrialController] Pause is disabled in formal mode.", this);
+            return;
+        }
+
         if (!trialRunning || trialFinished)
         {
             if (debugLog)
@@ -302,6 +338,13 @@ public class ExperimentTrialController : MonoBehaviour
 
     public void ResumeCurrentTrial()
     {
+        if (formalRunMode)
+        {
+            if (debugLog)
+                Debug.Log("[ExperimentTrialController] Resume is disabled in formal mode.", this);
+            return;
+        }
+
         if (!trialPaused)
         {
             if (debugLog)
@@ -368,6 +411,8 @@ public class ExperimentTrialController : MonoBehaviour
         {
             Debug.Log($"[ExperimentTrialController] Trial state reset. Reason={resetReason}", this);
         }
+
+        FormalExperimentContext.EndRun();
     }
 
     private void FinishCurrentTrial()
@@ -411,6 +456,8 @@ public class ExperimentTrialController : MonoBehaviour
         {
             experimentUIController.SetUIInteractable(true);
         }
+
+        FormalExperimentContext.EndRun();
     }
 
 }

@@ -3,7 +3,6 @@ using UnityEngine.UI;
 
 public class ExperimentUIController : MonoBehaviour
 {
-    public enum AnchorMode { FollowHMD, WorldFixed }
     public enum OccluderType { Static, Dynamic }
     public enum OcclusionSize { Small, Large }
 
@@ -127,7 +126,6 @@ public class ExperimentUIController : MonoBehaviour
 
         bool useNoOccluder = noOccluder && noOccluder.isOn;
 
-        AnchorMode anchor = ReadAnchorMode();
         OccluderType type = ReadOccluderType();
         OcclusionSize occSize = ReadOcclusionSize();
 
@@ -137,13 +135,15 @@ public class ExperimentUIController : MonoBehaviour
 
         MaskingEventManager.TrialOccluderType trialType = useNoOccluder
             ? MaskingEventManager.TrialOccluderType.NoOccluder
-            : ConvertToTrialOccluder(anchor, type);
+            : type == OccluderType.Static
+                ? MaskingEventManager.TrialOccluderType.StaticButterfly
+                : MaskingEventManager.TrialOccluderType.DynamicButterfly;
 
         maskingEventManager.ConfigureTrial(trialType, ratio);
 
         Debug.Log(
             $"[ExperimentUI] Apply: NoOccluder={useNoOccluder}, " +
-            $"Anchor={anchor}, Type={type}, Ratio={ratio}, " +
+            $"Type={type}, Ratio={ratio}, " +
             $"TrialOccluder={trialType}, LockUIAfterApply={lockUIAfterApply}"
         );
 
@@ -170,8 +170,10 @@ public class ExperimentUIController : MonoBehaviour
         bool useNoOccluder = noOccluder && noOccluder.isOn;
         bool regularOptionsInteractable = uiGloballyInteractable && !useNoOccluder;
 
-        if (anchorFollowHmd) anchorFollowHmd.interactable = regularOptionsInteractable;
-        if (anchorWorldFixed) anchorWorldFixed.interactable = regularOptionsInteractable;
+        // Anchor selection is retired from the formal protocol. Both visual
+        // conditions use the same world-fixed butterfly identity/layout.
+        if (anchorFollowHmd) anchorFollowHmd.interactable = false;
+        if (anchorWorldFixed) anchorWorldFixed.interactable = false;
 
         if (typeStatic) typeStatic.interactable = regularOptionsInteractable;
         if (typeDynamic) typeDynamic.interactable = regularOptionsInteractable;
@@ -197,12 +199,6 @@ public class ExperimentUIController : MonoBehaviour
         Debug.Log("[ExperimentUI] DEBUG Lock UI.");
     }
 
-    private AnchorMode ReadAnchorMode()
-    {
-        if (anchorWorldFixed && anchorWorldFixed.isOn) return AnchorMode.WorldFixed;
-        return AnchorMode.FollowHMD;
-    }
-
     private OccluderType ReadOccluderType()
     {
         if (typeDynamic && typeDynamic.isOn) return OccluderType.Dynamic;
@@ -213,20 +209,6 @@ public class ExperimentUIController : MonoBehaviour
     {
         if (sizeLarge && sizeLarge.isOn) return OcclusionSize.Large;
         return OcclusionSize.Small;
-    }
-
-    private MaskingEventManager.TrialOccluderType ConvertToTrialOccluder(AnchorMode anchor, OccluderType type)
-    {
-        if (anchor == AnchorMode.FollowHMD)
-        {
-            return type == OccluderType.Static
-                ? MaskingEventManager.TrialOccluderType.Newspaper
-                : MaskingEventManager.TrialOccluderType.Pigeon;
-        }
-
-        return type == OccluderType.Static
-            ? MaskingEventManager.TrialOccluderType.Sign
-            : MaskingEventManager.TrialOccluderType.Butterfly;
     }
 
     public int GetCurrentOcclusionRatio()

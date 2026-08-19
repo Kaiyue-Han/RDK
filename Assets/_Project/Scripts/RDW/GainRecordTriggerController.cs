@@ -180,9 +180,26 @@ public class GainRecordTriggerController : MonoBehaviour
         if (baselineElapsedSec < preEventBaselineSec)
             return;
 
+        float triggerSpeedMps = walkingDetector != null
+            ? Mathf.Max(0f, walkingDetector.SmoothedSpeed)
+            : 0f;
+
+        // Allocate trial/evaluation identifiers and reset injection/response state
+        // before OCCLUSION_START is logged so every event row is joinable.
+        bool evaluationPrepared = searchFlowController.NotifyEvaluationTriggered(
+            triggerSpeedMps
+        );
+        if (!evaluationPrepared)
+        {
+            CancelPreparation(true);
+            ResetStabilityTracking();
+            return;
+        }
+
         bool triggered = maskingEventManager.TriggerCurrentOcclusion();
         if (!triggered)
         {
+            searchFlowController.NotifyEvaluationTriggerFailed();
             CancelPreparation(true);
             ResetStabilityTracking();
             return;
@@ -190,9 +207,6 @@ public class GainRecordTriggerController : MonoBehaviour
 
         lastTriggerTime = Time.time;
         preEventState = PreEventState.EventActive;
-
-        // Tell the search flow that one evaluation is now running.
-        searchFlowController.NotifyEvaluationTriggered();
 
         if (logDebug)
         {

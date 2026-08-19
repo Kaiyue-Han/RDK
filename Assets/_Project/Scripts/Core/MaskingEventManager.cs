@@ -1,6 +1,5 @@
 using System;
 using UnityEngine;
-using UnityEngine.Serialization;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
 #endif
@@ -9,112 +8,111 @@ public class MaskingEventManager : MonoBehaviour
 {
     public enum TrialOccluderType
     {
-        Newspaper,
-        Pigeon,
-        Sign,
-        Butterfly,
-        NoOccluder
+        NoOccluder,
+        StaticButterfly,
+        DynamicButterfly
     }
 
-    [Header("Formal Trial Modules - Follow HMD")]
-    [SerializeField] private MonoBehaviour newspaperOccluderBehaviour;
-    [SerializeField] private MonoBehaviour pigeonOccluderBehaviour;
+    public readonly struct FormalEventTiming
+    {
+        public readonly float EventStartTime;
+        public readonly float EventEndTime;
+        public readonly float InjectionWindowStartTime;
+        public readonly float InjectionWindowEndTime;
 
-    [Header("Formal Trial Modules - World Fixed")]
-    [SerializeField] private MonoBehaviour signOccluderBehaviour;
+        public float EventDuration => EventEndTime - EventStartTime;
+        public float InjectionWindowDuration =>
+            InjectionWindowEndTime - InjectionWindowStartTime;
+
+        public FormalEventTiming(
+            float eventStartTime,
+            float eventEndTime,
+            float injectionWindowStartTime,
+            float injectionWindowEndTime
+        )
+        {
+            EventStartTime = eventStartTime;
+            EventEndTime = eventEndTime;
+            InjectionWindowStartTime = injectionWindowStartTime;
+            InjectionWindowEndTime = injectionWindowEndTime;
+        }
+    }
+
+    [Header("Formal Butterfly Occluder")]
+    [Tooltip("The same butterfly object/layout is used for both Static and Dynamic formal conditions.")]
     [SerializeField] private MonoBehaviour butterflyOccluderBehaviour;
 
     [Header("Logging")]
     [SerializeField] private EventLogger logger;
 
-    [Header("Occlusion Timing")]
-    [Tooltip("Used by static occluders: Newspaper and Sign.")]
-    [FormerlySerializedAs("newspaperOcclusionSec")]
-    [SerializeField] private float staticOcclusionSec = 0.7f;
-
-    [Tooltip("Used by dynamic occluders: Pigeon and Butterfly.")]
-    [FormerlySerializedAs("pigeonOcclusionSec")]
-    [SerializeField] private float dynamicOcclusionSec = 0.85f;
-
-    [Tooltip("Timing window used by the No Occluder baseline. No visual object is shown, but the injection point and evaluation timing still run normally.")]
+    [Header("Authoritative Formal Event Timing")]
     [Min(0.05f)]
-    [SerializeField] private float noOccluderWindowSec = 0.7f;
+    [SerializeField] private float formalEventDurationSec = 0.85f;
 
+    [Tooltip("Center of the injection window as a fraction of the event duration.")]
     [Range(0f, 1f)]
-    public float injectAt = 0.5f;
+    [SerializeField] private float injectAt = 0.50f;
 
-    // compatibility for old RDW controller access
-    public float occlusionSec => GetCurrentOcclusionDuration();
+    [Tooltip("Injection-window duration as a fraction of the event duration.")]
+    [Range(0.01f, 1f)]
+    [SerializeField] private float injectWindowRatio = 0.55f;
 
     [Header("Current Locked Trial Condition")]
-    [SerializeField] private bool isTrialConfigured = false;
-    [SerializeField] private bool isTrialRunning = false;
-    [SerializeField] private TrialOccluderType currentOccluderType = TrialOccluderType.Newspaper;
-    [SerializeField] private int currentOcclusionRatio = 40;
+    [SerializeField] private bool isTrialConfigured;
+    [SerializeField] private bool isTrialRunning;
+    [SerializeField] private TrialOccluderType currentOccluderType = TrialOccluderType.NoOccluder;
+    [SerializeField] private int currentOcclusionRatio;
 
     [Header("Runtime State")]
-    [SerializeField] private bool isOcclusionActive = false;
+    [SerializeField] private bool isOcclusionActive;
 
     [Header("Debug Manual Trigger")]
-    [Tooltip("Editor/debug only: press the selected key to trigger the currently configured occluder immediately. This bypasses walking/cooldown/search checks.")]
-    [SerializeField] private bool enableDebugKeyboardTrigger = true;
+    [Tooltip("Editor/debug only. Keep disabled in the formal StraightLine scene.")]
+    [SerializeField] private bool enableDebugKeyboardTrigger;
 
 #if ENABLE_INPUT_SYSTEM
-    [Tooltip("New Input System debug trigger key. Change this in the Inspector, for example F9, F10, Backquote, etc.")]
     [SerializeField] private Key debugTriggerKey = Key.F9;
 #endif
 
+    [SerializeField] private bool debugBypassTrialState;
 
-    [Tooltip("If true, the debug key can trigger even before a formal trial is running. It uses the current Inspector/UI condition.")]
-    [SerializeField] private bool debugBypassTrialState = true;
-
-    public event Action OnInjectPoint;
+    public event Action<FormalEventTiming> OnFormalEventStarted;
+    public event Action OnFormalEventEnding;
     public event Action OnOcclusionEnded;
 
     public bool IsTrialConfigured => isTrialConfigured;
     public bool IsTrialRunning => isTrialRunning;
     public bool IsOcclusionActive => isOcclusionActive;
-
     public TrialOccluderType CurrentOccluderType => currentOccluderType;
     public bool IsNoOccluderCondition => currentOccluderType == TrialOccluderType.NoOccluder;
     public int CurrentOcclusionRatio => IsNoOccluderCondition ? 0 : currentOcclusionRatio;
-    public string CurrentAnchorModeName => IsNoOccluderCondition
-        ? "None"
-        : (IsWorldFixedOccluder(currentOccluderType) ? "WorldFixed" : "FollowHMD");
+    public string CurrentAnchorModeName => IsNoOccluderCondition ? "None" : "WorldFixed";
     public string CurrentMotionModeName => IsNoOccluderCondition
         ? "None"
-        : (IsStaticOccluder(currentOccluderType) ? "Static" : "Dynamic");
-    public string CurrentVisualName => GetVisualName(currentOccluderType);
-    public string CurrentConditionKey => IsNoOccluderCondition
-        ? "NoOccluder"
-        : $"{CurrentAnchorModeName}_{CurrentMotionModeName}_{currentOcclusionRatio}";
+        : currentOccluderType == TrialOccluderType.StaticButterfly ? "Static" : "Dynamic";
+    public string CurrentVisualName => IsNoOccluderCondition ? "None" : "Butterfly";
+    public string CurrentConditionKey => BuildCurrentConditionName();
     public string CurrentConditionName => BuildCurrentConditionName();
+    public float FormalEventDurationSec => Mathf.Max(0.05f, formalEventDurationSec);
+    public float InjectAt => Mathf.Clamp01(injectAt);
+    public float InjectWindowRatio => Mathf.Clamp(injectWindowRatio, 0.01f, 1f);
+    public FormalEventTiming CurrentEventTiming { get; private set; }
 
-    private IOccluder newspaperOccluder;
-    private IOccluder pigeonOccluder;
-    private IOccluder signOccluder;
     private IOccluder butterflyOccluder;
+    private WorldFixedOccluder formalButterflyOccluder;
     private IOccluder activeOccluder;
-
-    private float occlusionStartTime;
-    private float currentOcclusionDuration;
-    private bool injectFired;
 
     private void Awake()
     {
-        RebindOccluders();
+        RebindOccluder();
 
         if (logger == null)
-            Debug.LogWarning("[MaskingEventManager] logger not assigned (no csv output).");
+            Debug.LogWarning("[MaskingEventManager] logger not assigned (no csv output).", this);
     }
 
     private void Start()
     {
-        newspaperOccluder?.Hide();
-        pigeonOccluder?.Hide();
-        signOccluder?.Hide();
         butterflyOccluder?.Hide();
-
         activeOccluder = null;
         isOcclusionActive = false;
     }
@@ -122,14 +120,10 @@ public class MaskingEventManager : MonoBehaviour
     private void Update()
     {
         if (enableDebugKeyboardTrigger && WasDebugTriggerPressed())
-        {
             DebugTriggerCurrentOcclusion();
-        }
 
-        if (!isOcclusionActive)
-            return;
-
-        RunOcclusionWindow();
+        if (isOcclusionActive && Time.time >= CurrentEventTiming.EventEndTime)
+            EndOcclusion();
     }
 
     public void ConfigureTrial(TrialOccluderType occluderType, int ratio)
@@ -137,21 +131,20 @@ public class MaskingEventManager : MonoBehaviour
         AbortAndResetToIdle("ConfigureTrial");
 
         currentOccluderType = occluderType;
-        currentOcclusionRatio = occluderType == TrialOccluderType.NoOccluder
-            ? 0
-            : ratio;
-
+        currentOcclusionRatio = IsNoOccluderCondition ? 0 : NormalizeFormalRatio(ratio);
         isTrialConfigured = true;
         isTrialRunning = true;
 
-        Debug.Log($"[MaskingEventManager] Trial configured: Type={currentOccluderType}, Ratio={currentOcclusionRatio}, Condition={BuildCurrentConditionName()}");
+        Debug.Log(
+            $"[MaskingEventManager] Formal condition configured: {BuildCurrentConditionName()}",
+            this
+        );
     }
 
     public void StopTrial()
     {
         AbortAndResetToIdle("StopTrial");
         isTrialRunning = false;
-        Debug.Log("[MaskingEventManager] Trial stopped.");
     }
 
     public void ClearTrial()
@@ -161,86 +154,76 @@ public class MaskingEventManager : MonoBehaviour
 
     public void ClearTrial(string resetReason, bool logReset)
     {
-        AbortAndResetToIdle(string.IsNullOrEmpty(resetReason) ? "ClearTrial" : resetReason, logReset);
+        AbortAndResetToIdle(
+            string.IsNullOrEmpty(resetReason) ? "ClearTrial" : resetReason,
+            logReset
+        );
 
         isTrialConfigured = false;
         isTrialRunning = false;
-        currentOccluderType = TrialOccluderType.Newspaper;
-        currentOcclusionRatio = 40;
-
-        Debug.Log($"[MaskingEventManager] Trial cleared. Reason={resetReason}");
+        currentOccluderType = TrialOccluderType.NoOccluder;
+        currentOcclusionRatio = 0;
     }
 
     public bool DebugTriggerCurrentOcclusion()
     {
         if (isOcclusionActive)
-        {
-            Debug.Log("[MaskingEventManager] Debug trigger pressed while occlusion is active. Restarting occlusion for position test.");
             AbortAndResetToIdle("DebugRestartOcclusion");
-        }
 
-        if (debugBypassTrialState)
+        if (debugBypassTrialState && (!isTrialConfigured || !isTrialRunning))
         {
-            if (!isTrialConfigured || !isTrialRunning)
-            {
-                Debug.LogWarning("[MaskingEventManager] Debug trigger is bypassing trial state. Current Inspector/UI condition will be used.");
-                isTrialConfigured = true;
-                isTrialRunning = true;
-            }
+            isTrialConfigured = true;
+            isTrialRunning = true;
         }
 
-        Debug.Log($"[MaskingEventManager] DEBUG trigger ({GetDebugTriggerKeyName()}): Type={currentOccluderType}, Ratio={currentOcclusionRatio}, Condition={BuildCurrentConditionName()}");
         return TriggerCurrentOcclusion();
     }
 
     public bool TriggerCurrentOcclusion()
     {
-        if (!isTrialConfigured)
+        if (!isTrialConfigured || !isTrialRunning || isOcclusionActive)
         {
-            Debug.LogWarning("[MaskingEventManager] Trigger ignored: trial not configured.");
+            Debug.LogWarning(
+                $"[MaskingEventManager] Trigger rejected. configured={isTrialConfigured}, " +
+                $"running={isTrialRunning}, active={isOcclusionActive}",
+                this
+            );
             return false;
         }
 
-        if (!isTrialRunning)
-        {
-            Debug.LogWarning("[MaskingEventManager] Trigger ignored: trial not running.");
-            return false;
-        }
-
-        if (isOcclusionActive)
-        {
-            Debug.LogWarning("[MaskingEventManager] Trigger ignored: occlusion already active.");
-            return false;
-        }
-
-        activeOccluder = IsNoOccluderCondition
-            ? null
-            : GetCurrentOccluder();
-
+        activeOccluder = IsNoOccluderCondition ? null : butterflyOccluder;
         if (!IsNoOccluderCondition && activeOccluder == null)
         {
-            Debug.LogError($"[MaskingEventManager] Trigger failed: current occluder is null. Type={currentOccluderType}");
+            Debug.LogError("[MaskingEventManager] Formal butterfly occluder is not assigned.", this);
             return false;
         }
 
-        currentOcclusionDuration = GetCurrentOcclusionDuration();
-        occlusionStartTime = Time.time;
-        injectFired = false;
+        float eventStart = Time.time;
+        CurrentEventTiming = CalculateTiming(eventStart);
+        FormalExperimentContext.RecordEventStart(eventStart);
+
+        if (formalButterflyOccluder != null)
+        {
+            formalButterflyOccluder.SetSpatialMotionEnabled(
+                currentOccluderType == TrialOccluderType.DynamicButterfly
+            );
+        }
+
+        if (activeOccluder != null)
+            activeOccluder.Show(CurrentOcclusionRatio, FormalEventDurationSec);
+
         isOcclusionActive = true;
 
         logger?.Mark(
             "OCCLUSION_START",
-            this
+            this,
+            -1f,
+            $"eventDurationSec={FormalEventDurationSec:F3};" +
+            $"injectionWindowStart={CurrentEventTiming.InjectionWindowStartTime:F3};" +
+            $"injectionWindowEnd={CurrentEventTiming.InjectionWindowEndTime:F3}"
         );
 
-        if (!IsNoOccluderCondition)
-            activeOccluder.Show(currentOcclusionRatio, currentOcclusionDuration);
-
-        Debug.Log(
-            $"[MaskingEventManager] TriggerCurrentOcclusion: " +
-            $"Type={currentOccluderType}, Ratio={CurrentOcclusionRatio}, " +
-            $"Duration={currentOcclusionDuration}, Condition={BuildCurrentConditionName()}"
-        );
+        OnFormalEventStarted?.Invoke(CurrentEventTiming);
         return true;
     }
 
@@ -251,30 +234,88 @@ public class MaskingEventManager : MonoBehaviour
 
     public void AbortAndResetToIdle(string resetReason, bool logReset)
     {
-        activeOccluder?.Hide();
-        newspaperOccluder?.Hide();
-        pigeonOccluder?.Hide();
-        signOccluder?.Hide();
-        butterflyOccluder?.Hide();
+        if (isOcclusionActive)
+            OnFormalEventEnding?.Invoke();
 
+        activeOccluder?.Hide();
+        butterflyOccluder?.Hide();
         activeOccluder = null;
         isOcclusionActive = false;
-        injectFired = false;
-        currentOcclusionDuration = 0f;
+        CurrentEventTiming = default;
 
         if (logReset)
-        {
-            logger?.LogResetEvent(
-                "RESET_TO_IDLE",
-                this,
-                resetReason
-            );
-        }
+            logger?.LogResetEvent("RESET_TO_IDLE", this, resetReason);
     }
 
     public void SetOcclusionRatio(int ratio)
     {
-        currentOcclusionRatio = IsNoOccluderCondition ? 0 : ratio;
+        currentOcclusionRatio = IsNoOccluderCondition ? 0 : NormalizeFormalRatio(ratio);
+    }
+
+    public string BuildCurrentConditionName()
+    {
+        if (IsNoOccluderCondition)
+            return "NoOccluder";
+
+        string motion = currentOccluderType == TrialOccluderType.StaticButterfly
+            ? "StaticButterfly"
+            : "DynamicButterfly";
+        return $"{motion}{CurrentOcclusionRatio}";
+    }
+
+    private FormalEventTiming CalculateTiming(float eventStart)
+    {
+        float duration = FormalEventDurationSec;
+        float windowDuration = duration * InjectWindowRatio;
+        float midpoint = duration * InjectAt;
+        float startOffset = Mathf.Clamp(midpoint - windowDuration * 0.5f, 0f, duration);
+        float endOffset = Mathf.Clamp(midpoint + windowDuration * 0.5f, 0f, duration);
+
+        return new FormalEventTiming(
+            eventStart,
+            eventStart + duration,
+            eventStart + startOffset,
+            eventStart + endOffset
+        );
+    }
+
+    private void EndOcclusion()
+    {
+        OnFormalEventEnding?.Invoke();
+
+        activeOccluder?.Hide();
+        activeOccluder = null;
+        isOcclusionActive = false;
+
+        logger?.Mark("OCCLUSION_END", this);
+        OnOcclusionEnded?.Invoke();
+    }
+
+    private void RebindOccluder()
+    {
+        butterflyOccluder = butterflyOccluderBehaviour as IOccluder;
+        formalButterflyOccluder = butterflyOccluderBehaviour as WorldFixedOccluder;
+
+        if (butterflyOccluderBehaviour != null && butterflyOccluder == null)
+        {
+            Debug.LogError(
+                "[MaskingEventManager] butterflyOccluderBehaviour must implement IOccluder.",
+                this
+            );
+        }
+    }
+
+    private static int NormalizeFormalRatio(int ratio)
+    {
+        if (ratio == 40 || ratio == 70)
+            return ratio;
+
+        int normalized = ratio < 55 ? 40 : 70;
+        Debug.LogWarning(
+            $"[MaskingEventManager] Formal coverage must be 40 or 70. " +
+            $"Received {ratio}; using {normalized}."
+        );
+        return normalized;
     }
 
     private bool WasDebugTriggerPressed()
@@ -284,136 +325,5 @@ public class MaskingEventManager : MonoBehaviour
 #else
         return false;
 #endif
-    }
-
-    private string GetDebugTriggerKeyName()
-    {
-#if ENABLE_INPUT_SYSTEM
-        return debugTriggerKey.ToString();
-#else
-        return "New Input System not enabled";
-#endif
-    }
-
-    private void RunOcclusionWindow()
-    {
-        float elapsed = Time.time - occlusionStartTime;
-
-        if (!injectFired && elapsed >= currentOcclusionDuration * injectAt)
-        {
-            injectFired = true;
-
-            logger?.Mark(
-                "INJECT_POINT",
-                this
-            );
-
-            OnInjectPoint?.Invoke();
-        }
-
-        if (elapsed >= currentOcclusionDuration)
-        {
-            EndOcclusion();
-        }
-    }
-
-    private void EndOcclusion()
-    {
-        activeOccluder?.Hide();
-        activeOccluder = null;
-
-        isOcclusionActive = false;
-        injectFired = false;
-
-        logger?.Mark(
-            "OCCLUSION_END",
-            this
-        );
-
-        Debug.Log("[MaskingEventManager] Occlusion ended.");
-
-        OnOcclusionEnded?.Invoke();
-    }
-
-    private void RebindOccluders()
-    {
-        newspaperOccluder = newspaperOccluderBehaviour as IOccluder;
-        pigeonOccluder = pigeonOccluderBehaviour as IOccluder;
-        signOccluder = signOccluderBehaviour as IOccluder;
-        butterflyOccluder = butterflyOccluderBehaviour as IOccluder;
-
-        ValidateOccluder(newspaperOccluderBehaviour, newspaperOccluder, "newspaperOccluderBehaviour");
-        ValidateOccluder(pigeonOccluderBehaviour, pigeonOccluder, "pigeonOccluderBehaviour");
-        ValidateOccluder(signOccluderBehaviour, signOccluder, "signOccluderBehaviour");
-        ValidateOccluder(butterflyOccluderBehaviour, butterflyOccluder, "butterflyOccluderBehaviour");
-    }
-
-    private void ValidateOccluder(MonoBehaviour behaviour, IOccluder occluder, string fieldName)
-    {
-        if (behaviour != null && occluder == null)
-            Debug.LogError($"[MaskingEventManager] {fieldName} must implement IOccluder.");
-    }
-
-    private IOccluder GetCurrentOccluder()
-    {
-        switch (currentOccluderType)
-        {
-            case TrialOccluderType.Newspaper:
-                return newspaperOccluder;
-            case TrialOccluderType.Pigeon:
-                return pigeonOccluder;
-            case TrialOccluderType.Sign:
-                return signOccluder;
-            case TrialOccluderType.Butterfly:
-                return butterflyOccluder;
-            default:
-                return null;
-        }
-    }
-
-    private float GetCurrentOcclusionDuration()
-    {
-        if (IsNoOccluderCondition)
-            return noOccluderWindowSec;
-
-        return IsStaticOccluder(currentOccluderType)
-            ? staticOcclusionSec
-            : dynamicOcclusionSec;
-    }
-
-    private bool IsStaticOccluder(TrialOccluderType type)
-    {
-        return type == TrialOccluderType.Newspaper || type == TrialOccluderType.Sign;
-    }
-
-    public string BuildCurrentConditionName()
-    {
-        return IsNoOccluderCondition
-            ? "NoOccluder"
-            : $"{CurrentConditionKey}_{CurrentVisualName}";
-    }
-
-    private bool IsWorldFixedOccluder(TrialOccluderType type)
-    {
-        return type == TrialOccluderType.Sign || type == TrialOccluderType.Butterfly;
-    }
-
-    private string GetVisualName(TrialOccluderType type)
-    {
-        switch (type)
-        {
-            case TrialOccluderType.Newspaper:
-                return "Newspaper";
-            case TrialOccluderType.Pigeon:
-                return "Pigeon";
-            case TrialOccluderType.Sign:
-                return "Sign";
-            case TrialOccluderType.Butterfly:
-                return "Butterfly";
-            case TrialOccluderType.NoOccluder:
-                return "None";
-            default:
-                return "Unknown";
-        }
     }
 }

@@ -9,6 +9,7 @@ public class RDWControllerInputGate : MonoBehaviour
     [Header("Controller Locomotion Inputs")]
     [SerializeField] private InputActionReference continuousLocomotionInput;
     [SerializeField] private InputActionReference teleportLocomotionInput;
+    [SerializeField] private InputActionReference turnLocomotionInput;
     [SerializeField] private float moveDeadzone = 0.2f;
 
     public bool IsControllerLocomotionActive { get; private set; }
@@ -20,6 +21,9 @@ public class RDWControllerInputGate : MonoBehaviour
 
         if (teleportLocomotionInput && teleportLocomotionInput.action != null)
             teleportLocomotionInput.action.Enable();
+
+        if (turnLocomotionInput && turnLocomotionInput.action != null)
+            turnLocomotionInput.action.Enable();
     }
 
     private void OnDisable()
@@ -29,6 +33,9 @@ public class RDWControllerInputGate : MonoBehaviour
 
         if (teleportLocomotionInput && teleportLocomotionInput.action != null)
             teleportLocomotionInput.action.Disable();
+
+        if (turnLocomotionInput && turnLocomotionInput.action != null)
+            turnLocomotionInput.action.Disable();
     }
 
     private void Update()
@@ -36,7 +43,9 @@ public class RDWControllerInputGate : MonoBehaviour
         if (!rdwController) return;
 
         IsControllerLocomotionActive =
-            IsContinuousLocomotionActive() || IsTeleportLocomotionActive();
+            IsContinuousLocomotionActive() ||
+            IsTeleportLocomotionActive() ||
+            IsTurnLocomotionActive();
 
         rdwController.enabled = !IsControllerLocomotionActive;
     }
@@ -55,6 +64,16 @@ public class RDWControllerInputGate : MonoBehaviour
         if (!teleportLocomotionInput || teleportLocomotionInput.action == null)
             return false;
 
-        return teleportLocomotionInput.action.IsPressed();
+        Vector2 v = teleportLocomotionInput.action.ReadValue<Vector2>();
+        return v.magnitude > moveDeadzone;
+    }
+
+    private bool IsTurnLocomotionActive()
+    {
+        if (!turnLocomotionInput || turnLocomotionInput.action == null)
+            return false;
+
+        Vector2 v = turnLocomotionInput.action.ReadValue<Vector2>();
+        return v.magnitude > moveDeadzone;
     }
 }

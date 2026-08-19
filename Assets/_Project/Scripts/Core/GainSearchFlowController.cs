@@ -43,7 +43,7 @@ public class GainSearchFlowController : MonoBehaviour
     [SerializeField] private float initialStepDeg = 2f;
     [SerializeField] private float finalStepDeg = 1f;
     [SerializeField] private int stepReductionAfterReversals = 2;
-    [SerializeField] private int targetReversalCount = 8;
+    [SerializeField] private int targetReversalCount = 12;
     [SerializeField] private int ignoreFirstReversals = 2;
     [SerializeField] private int maxValidTrials = 30;
     [SerializeField] private float minThetaDeg = 0f;
@@ -65,10 +65,10 @@ public class GainSearchFlowController : MonoBehaviour
     [Min(0f)]
     [SerializeField] private float highCatchThetaDeg = 25f;
 
-    [Header("Auto Finish Evaluation")]
-    [Tooltip("Evaluation is automatically finished this many seconds after occlusion ends. Feedback is only counted after injection starts.")]
-    [SerializeField] private bool autoFinishAfterOcclusionEnd = true;
-    [SerializeField] private float autoFinishDelaySec = 1.0f;
+    [Header("Formal Response Window")]
+    [Tooltip("Deadline is actual injection start plus this duration. The visual event may end before the response window.")]
+    [Min(0.1f)]
+    [SerializeField] private float responseWindowSec = 3.0f;
 
     [Header("Debug Keyboard")]
     [SerializeField] private bool enableDebugKeyboard = true;
@@ -138,8 +138,10 @@ public class GainSearchFlowController : MonoBehaviour
     private bool evaluationPending = false;
     private bool evaluationInProgress = false;
 
-    private bool autoFinishScheduled = false;
-    private float autoFinishTime = -1f;
+    private bool responseWindowOpen;
+    private bool responseAccepted;
+    private float responseTime = float.NaN;
+    private float responseDeadline = float.NaN;
 
     // Catch-event runtime state. Catch trials are interleaved with the staircase
     // but never change theta, reversal count, or validTrialCount.
@@ -158,12 +160,24 @@ public class GainSearchFlowController : MonoBehaviour
     {
         if (maskingEventManager != null)
             maskingEventManager.OnOcclusionEnded += HandleOcclusionEnded;
+
+        if (injectionController != null)
+        {
+            injectionController.OnInjectionStarted += HandleInjectionStarted;
+            injectionController.OnInjectionCompleted += HandleInjectionCompleted;
+        }
     }
 
     private void OnDisable()
     {
         if (maskingEventManager != null)
             maskingEventManager.OnOcclusionEnded -= HandleOcclusionEnded;
+
+        if (injectionController != null)
+        {
+            injectionController.OnInjectionStarted -= HandleInjectionStarted;
+            injectionController.OnInjectionCompleted -= HandleInjectionCompleted;
+        }
     }
 
     private void Start()
@@ -190,60 +204,39 @@ public class GainSearchFlowController : MonoBehaviour
             if (Input.GetKeyDown(resetSearchKey))
                 ResetSearch();
         }
+    }
 
-        if (autoFinishScheduled && Time.time >= autoFinishTime)
-        {
-            autoFinishScheduled = false;
-            NotifyCurrentEvaluationFinished();
-        }
-
+    private void LateUpdate()
+    {
+        // ParticipantFeedbackController samples XR input in Update. Processing in
+        // LateUpdate makes a button report from the deadline frame available before
+        // the no-response decision is made, independent of Update execution order.
         if (participantFeedback == null)
             return;
 
-        if (participantFeedback.ConsumeFeedback())
+        if (
+            responseWindowOpen &&
+            !responseAccepted &&
+            participantFeedback.TryConsumeFeedback(out float feedbackTime)
+        )
         {
-            if (!evaluationInProgress)
+            if (feedbackTime <= responseDeadline)
             {
-                if (debugLog)
-                {
-                    Debug.Log(
-                        $"[GainSearchFlowController] Feedback ignored because no evaluation is in progress. " +
-                        $"Phase={phase}, Pending={evaluationPending}, InProgress={evaluationInProgress}",
-                        this
-                    );
-                }
-
-                return;
+                AcceptResponse(feedbackTime);
             }
+        }
 
-            // Backend feedback window: feedback is counted only after the injection has actually started.
-            // This avoids counting reactions to the occluder itself before the redirection event begins.
-            if (injectionController == null || !injectionController.CurrentEvaluationInjectionStarted)
-            {
-                if (debugLog)
-                {
-                    string outcome = injectionController != null
-                        ? injectionController.CurrentEvaluationInjectionOutcome
-                        : "NO_INJECTION_CONTROLLER";
+        if (responseWindowOpen && !responseAccepted && Time.time >= responseDeadline)
+        {
+            responseWindowOpen = false;
+            noticedDuringCurrentEvaluation = false;
+            FormalExperimentContext.RecordNoResponse();
+            participantFeedback.DisableListening();
 
-                    Debug.Log(
-                        $"[GainSearchFlowController] Feedback ignored before injection start. Outcome={outcome}",
-                        this
-                    );
-                }
+            if (eventLogger != null && maskingEventManager != null)
+                eventLogger.Mark("RESPONSE_TIMEOUT", maskingEventManager);
 
-                return;
-            }
-
-            noticedDuringCurrentEvaluation = true;
-
-            if (debugLog)
-            {
-                Debug.Log(
-                    $"[GainSearchFlowController] Feedback noticed during current evaluation. Phase={phase}",
-                    this
-                );
-            }
+            TryFinishEvaluationAfterResponse();
         }
     }
 
@@ -268,11 +261,10 @@ public class GainSearchFlowController : MonoBehaviour
         evaluationPending = true;
         evaluationInProgress = false;
 
-        autoFinishScheduled = false;
-        autoFinishTime = -1f;
+        ResetResponseState();
 
         if (participantFeedback != null)
-            participantFeedback.ResetState(true);
+            participantFeedback.ResetState(false);
 
         if (injectionController != null)
             injectionController.ResetDirectionCache();
@@ -313,10 +305,10 @@ public class GainSearchFlowController : MonoBehaviour
             $"catchIntervalValidNormalTrials={Mathf.Max(1, minNormalTrialsBetweenCatch)}-{Mathf.Max(Mathf.Max(1, minNormalTrialsBetweenCatch), maxNormalTrialsBetweenCatch)};" +
             $"zeroCatchThetaDeg=0.000;" +
             $"highCatchThetaDeg={FormatFloat(GetClampedHighCatchThetaDeg())};" +
-            $"catchTypePattern=ZERO-HIGH-ZERO";
+            $"catchTypePattern=ZERO-HIGH-ALTERNATING";
     }
 
-    public void NotifyEvaluationTriggered()
+    public bool NotifyEvaluationTriggered(float walkingSpeedAtTriggerMps)
     {
         if (phase == SearchPhase.Idle || phase == SearchPhase.Finished)
         {
@@ -327,7 +319,7 @@ public class GainSearchFlowController : MonoBehaviour
                     this
                 );
             }
-            return;
+            return false;
         }
 
         if (!evaluationPending)
@@ -340,7 +332,21 @@ public class GainSearchFlowController : MonoBehaviour
                     this
                 );
             }
-            return;
+            return false;
+        }
+
+        string trialType = GetTrialTypeLogName(currentEvaluationTrialType);
+        if (!FormalExperimentContext.BeginEvaluation(
+                trialType,
+                currentPlannedThetaDeg,
+                walkingSpeedAtTriggerMps
+            ))
+        {
+            Debug.LogError(
+                "[GainSearchFlowController] Formal run identifiers are not active.",
+                this
+            );
+            return false;
         }
 
         evaluationPending = false;
@@ -350,11 +356,10 @@ public class GainSearchFlowController : MonoBehaviour
         if (injectionController != null)
             injectionController.BeginEvaluationInjectionTracking();
 
-        autoFinishScheduled = false;
-        autoFinishTime = -1f;
+        ResetResponseState();
 
         if (participantFeedback != null)
-            participantFeedback.ResetState(true);
+            participantFeedback.ResetState(false);
 
         if (eventLogger != null && maskingEventManager != null)
         {
@@ -403,6 +408,24 @@ public class GainSearchFlowController : MonoBehaviour
                 this
             );
         }
+
+        return true;
+    }
+
+    public void NotifyEvaluationTriggerFailed()
+    {
+        if (!evaluationInProgress)
+            return;
+
+        evaluationInProgress = false;
+        evaluationPending = true;
+        ResetResponseState();
+
+        if (participantFeedback != null)
+            participantFeedback.ResetState(false);
+
+        if (injectionController != null)
+            injectionController.CancelActiveInjection("TRIGGER_FAILED", false);
     }
 
     public void NotifyCurrentEvaluationFinished()
@@ -437,11 +460,18 @@ public class GainSearchFlowController : MonoBehaviour
         float staircaseThetaBeforeFinish = currentTestThetaDeg;
         bool noticedBeforeFinish = noticedDuringCurrentEvaluation;
 
-        bool injectionActuallyStarted =
-            injectionController != null &&
-            injectionController.CurrentEvaluationInjectionStarted;
+        if (responseWindowOpen && !responseAccepted)
+        {
+            if (debugLog)
+                Debug.LogWarning("[GainSearchFlowController] Finish ignored while response window is open.", this);
+            return;
+        }
 
-        if (!injectionActuallyStarted)
+        bool injectionActuallyCompleted =
+            injectionController != null &&
+            injectionController.CurrentEvaluationInjectionCompleted;
+
+        if (!injectionActuallyCompleted)
         {
             string outcome = injectionController != null
                 ? injectionController.CurrentEvaluationInjectionOutcome
@@ -463,7 +493,7 @@ public class GainSearchFlowController : MonoBehaviour
                         false,
                         0,
                         reversalThetas.Count,
-                        "NO_INJECTION_STARTED",
+                        "INJECTION_NOT_COMPLETED",
                         $"trialType=NORMAL;injectionOutcome={outcome};retrySameTheta=true"
                     );
                 }
@@ -478,7 +508,7 @@ public class GainSearchFlowController : MonoBehaviour
                         false,
                         "INVALID_RETRY",
                         staircaseThetaBeforeFinish,
-                        "NO_INJECTION_STARTED",
+                        "INJECTION_NOT_COMPLETED",
                         $"injectionOutcome={outcome};retrySameCatch=true;{BuildCatchRuntimeExtra()}"
                     );
                 }
@@ -488,11 +518,10 @@ public class GainSearchFlowController : MonoBehaviour
             evaluationInProgress = false;
             evaluationPending = true;
 
-            autoFinishScheduled = false;
-            autoFinishTime = -1f;
+            ResetResponseState();
 
             if (participantFeedback != null)
-                participantFeedback.ResetState(true);
+                participantFeedback.ResetState(false);
 
             // Keep exactly the same planned normal/catch trial after an invalid event.
             ApplyCurrentPlannedThetaToInjection();
@@ -500,7 +529,7 @@ public class GainSearchFlowController : MonoBehaviour
             if (debugLog)
             {
                 Debug.LogWarning(
-                    $"[GainSearchFlowController] Evaluation invalid: no injection started. " +
+                    $"[GainSearchFlowController] Evaluation invalid: injection did not complete. " +
                     $"TrialType={trialTypeBeforeFinish}, Outcome={outcome}. " +
                     $"Staircase and catch schedule not updated.",
                     this
@@ -524,11 +553,12 @@ public class GainSearchFlowController : MonoBehaviour
             );
         }
 
+        FormalExperimentContext.CompleteTrial();
+
         noticedDuringCurrentEvaluation = false;
         evaluationInProgress = false;
 
-        autoFinishScheduled = false;
-        autoFinishTime = -1f;
+        ResetResponseState();
 
         if (phase != SearchPhase.Idle && phase != SearchPhase.Finished)
         {
@@ -543,7 +573,7 @@ public class GainSearchFlowController : MonoBehaviour
         ApplyCurrentPlannedThetaToInjection();
 
         if (participantFeedback != null)
-            participantFeedback.ResetState(true);
+            participantFeedback.ResetState(false);
 
         if (debugLog)
         {
@@ -567,11 +597,13 @@ public class GainSearchFlowController : MonoBehaviour
         evaluationInProgress = false;
         noticedDuringCurrentEvaluation = false;
 
-        autoFinishScheduled = false;
-        autoFinishTime = -1f;
+        ResetResponseState();
 
         if (participantFeedback != null)
-            participantFeedback.ResetState(true);
+            participantFeedback.ResetState(false);
+
+        if (injectionController != null)
+            injectionController.CancelActiveInjection(stopReason, true);
 
         if (recordTriggerController != null)
             recordTriggerController.ResetTriggerState();
@@ -616,15 +648,14 @@ public class GainSearchFlowController : MonoBehaviour
         evaluationPending = false;
         evaluationInProgress = false;
 
-        autoFinishScheduled = false;
-        autoFinishTime = -1f;
+        ResetResponseState();
 
         ResetCatchState();
         PlanNextEvaluation();
         ApplyCurrentPlannedThetaToInjection();
 
         if (participantFeedback != null)
-            participantFeedback.ResetState(true);
+            participantFeedback.ResetState(false);
 
         if (injectionController != null)
             injectionController.ResetDirectionCache();
@@ -644,22 +675,112 @@ public class GainSearchFlowController : MonoBehaviour
 
     private void HandleOcclusionEnded()
     {
-        if (!autoFinishAfterOcclusionEnd)
-            return;
-
         if (!evaluationInProgress)
             return;
 
-        autoFinishScheduled = true;
-        autoFinishTime = Time.time + autoFinishDelaySec;
-
-        if (debugLog)
+        // A valid response window may intentionally continue after the 0.85 s
+        // visual event. If injection failed or was incomplete, no response can
+        // make the evaluation valid, so retry the same planned trial immediately.
+        if (
+            injectionController == null ||
+            !injectionController.CurrentEvaluationInjectionCompleted
+        )
         {
-            Debug.Log(
-                $"[GainSearchFlowController] Occlusion ended -> auto finish scheduled at t={autoFinishTime:F2}",
-                this
+            ResetResponseState();
+            if (participantFeedback != null)
+                participantFeedback.ResetState(false);
+            NotifyCurrentEvaluationFinished();
+        }
+    }
+
+    private void HandleInjectionStarted(float actualInjectionStartTime)
+    {
+        if (!evaluationInProgress || responseAccepted)
+            return;
+
+        responseTime = float.NaN;
+        responseDeadline = actualInjectionStartTime + Mathf.Max(0.1f, responseWindowSec);
+        responseWindowOpen = true;
+
+        if (participantFeedback != null)
+            participantFeedback.ResetState(true);
+
+        FormalExperimentContext.RecordInjectionStart(
+            actualInjectionStartTime,
+            responseDeadline,
+            injectionController != null
+                ? injectionController.WalkingSpeedAtInjectionMps
+                : 0f,
+            injectionController != null
+                ? injectionController.DebugMovementCongruenceState
+                : "UNKNOWN"
+        );
+
+        if (eventLogger != null && maskingEventManager != null)
+        {
+            eventLogger.Mark(
+                "RESPONSE_WINDOW_OPEN",
+                maskingEventManager,
+                -1f,
+                $"deadline={FormatFloat(responseDeadline)};" +
+                $"windowSec={FormatFloat(responseWindowSec)}"
             );
         }
+    }
+
+    private void HandleInjectionCompleted(float completionTime)
+    {
+        TryFinishEvaluationAfterResponse();
+    }
+
+    private void AcceptResponse(float acceptedResponseTime)
+    {
+        if (!evaluationInProgress || !responseWindowOpen || responseAccepted)
+            return;
+
+        responseAccepted = true;
+        responseWindowOpen = false;
+        responseTime = acceptedResponseTime;
+        noticedDuringCurrentEvaluation = true;
+
+        if (participantFeedback != null)
+            participantFeedback.DisableListening();
+
+        FormalExperimentContext.RecordResponse(responseTime, true);
+
+        if (eventLogger != null && maskingEventManager != null)
+        {
+            eventLogger.LogParticipantResponse(
+                maskingEventManager,
+                true,
+                responseTime,
+                FormalExperimentContext.ResponseRtSec
+            );
+        }
+
+        TryFinishEvaluationAfterResponse();
+    }
+
+    private void TryFinishEvaluationAfterResponse()
+    {
+        if (!evaluationInProgress)
+            return;
+
+        bool responseResolved = responseAccepted || !responseWindowOpen;
+        bool injectionCompleted =
+            injectionController != null &&
+            injectionController.CurrentEvaluationInjectionCompleted;
+
+        if (responseResolved && injectionCompleted)
+            NotifyCurrentEvaluationFinished();
+    }
+
+    private void ResetResponseState()
+    {
+        responseWindowOpen = false;
+        responseAccepted = false;
+        responseTime = float.NaN;
+        responseDeadline = float.NaN;
     }
 
     private void ProcessValidStaircaseEvaluation(float testThetaBeforeFinish, bool noticedBeforeFinish)
@@ -959,23 +1080,15 @@ public class GainSearchFlowController : MonoBehaviour
         // A valid catch consumes the catch slot but does NOT count as a valid
         // staircase trial and does NOT change reversal state or staircase theta.
         normalTrialsSinceLastCatch = 0;
-        catchSequenceIndex = (catchSequenceIndex + 1) % 3;
+        catchSequenceIndex = (catchSequenceIndex + 1) % 2;
         ScheduleNextCatchInterval();
     }
 
     private EvaluationTrialType GetNextCatchType()
     {
-        // Repeating 2:1 pattern with a high catch appearing by the second catch:
-        // ZERO -> HIGH -> ZERO -> ZERO -> HIGH -> ZERO ...
-        switch (catchSequenceIndex % 3)
-        {
-            case 1:
-                return EvaluationTrialType.CatchHigh;
-            case 0:
-            case 2:
-            default:
-                return EvaluationTrialType.CatchZero;
-        }
+        return catchSequenceIndex % 2 == 0
+            ? EvaluationTrialType.CatchZero
+            : EvaluationTrialType.CatchHigh;
     }
 
     private void ScheduleNextCatchInterval()

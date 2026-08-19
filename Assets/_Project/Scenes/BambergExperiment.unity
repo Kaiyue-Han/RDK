@@ -632,12 +632,14 @@ MonoBehaviour:
   maskingEventManager: {fileID: 163978636}
   searchFlowController: {fileID: 163978643}
   eventLogger: {fileID: 163978640}
+  worldRotator: {fileID: 1269424308}
   experimentUIController: {fileID: 620492356}
   pauseResumeInputBehaviour: {fileID: 84120923}
   abortInputBehaviour: {fileID: 84120922}
   abortHoldSec: 3
+  formalRunMode: 1
   debugLog: 1
-  enableDebugKeyboard: 1
+  enableDebugKeyboard: 0
   startTrialKey: 289
   resetTrialKey: 290
   abortTrialKey: 291
@@ -1021,23 +1023,19 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 136dd2745b88bad41b73ff06ba16ad20, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::MaskingEventManager
-  newspaperOccluderBehaviour: {fileID: 697901440}
-  pigeonOccluderBehaviour: {fileID: 972263566}
-  signOccluderBehaviour: {fileID: 407064025}
   butterflyOccluderBehaviour: {fileID: 1154869565}
   logger: {fileID: 163978640}
-  staticOcclusionSec: 0.7
-  dynamicOcclusionSec: 0.85
-  noOccluderWindowSec: 0.7
+  formalEventDurationSec: 0.85
   injectAt: 0.5
+  injectWindowRatio: 0.55
   isTrialConfigured: 0
   isTrialRunning: 0
   currentOccluderType: 0
-  currentOcclusionRatio: 40
+  currentOcclusionRatio: 0
   isOcclusionActive: 0
-  enableDebugKeyboardTrigger: 1
+  enableDebugKeyboardTrigger: 0
   debugTriggerKey: 40
-  debugBypassTrialState: 1
+  debugBypassTrialState: 0
 --- !u!4 &163978637
 Transform:
   m_ObjectHideFlags: 0
@@ -1134,7 +1132,7 @@ MonoBehaviour:
   initialStepDeg: 2
   finalStepDeg: 1
   stepReductionAfterReversals: 2
-  targetReversalCount: 8
+  targetReversalCount: 12
   ignoreFirstReversals: 2
   maxValidTrials: 30
   minThetaDeg: 0
@@ -1143,9 +1141,8 @@ MonoBehaviour:
   minNormalTrialsBetweenCatch: 7
   maxNormalTrialsBetweenCatch: 9
   highCatchThetaDeg: 25
-  autoFinishAfterOcclusionEnd: 1
-  autoFinishDelaySec: 2
-  enableDebugKeyboard: 1
+  responseWindowSec: 3
+  enableDebugKeyboard: 0
   startSearchKey: 286
   finishEvaluationKey: 287
   resetSearchKey: 288
@@ -3771,7 +3768,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &407064024
 Transform:
   m_ObjectHideFlags: 0
@@ -6269,7 +6266,7 @@ MonoBehaviour:
   applyOnStart: 0
   panelRoot: {fileID: 620492352}
   closePanelAfterApply: 1
-  lockUIAfterApply: 0
+  lockUIAfterApply: 1
 --- !u!114 &620492357
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -6317,6 +6314,11 @@ MonoBehaviour:
   tabController: {fileID: 620492357}
   resultUIController: {fileID: 556227524}
   eventLogger: {fileID: 163978640}
+  walkingDetector: {fileID: 1269424314}
+  physicalPositionTracker: {fileID: 1269424315}
+  playAreaRectProvider: {fileID: 1269424311}
+  injectionController: {fileID: 1269424309}
+  participantFeedback: {fileID: 1414374910}
   resetButton: {fileID: 2117871770}
   showSettingsTabAfterReset: 1
   clearTrialConfiguration: 1
@@ -6623,7 +6625,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &697901438
 Transform:
   m_ObjectHideFlags: 0
@@ -7986,7 +7988,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &972263564
 Transform:
   m_ObjectHideFlags: 0
@@ -10185,9 +10187,6 @@ MonoBehaviour:
   movementTrendWindowSec: 0.6
   minMovementSegmentDistance: 0.06
   straightAngleToleranceDeg: 8
-  eventDuration: 0.9
-  injectAt: 0.5
-  injectWindowRatio: 0.55
   logDebug: 1
   debugUserTurnSign: 0
   debugUserTurnAngleDeg: 0
@@ -10272,7 +10271,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::RDWEnableGate
   rdwController: {fileID: 1269424308}
   continuousLocomotionInput: {fileID: 1412092361}
-  teleportLocomotionInput: {fileID: 1364240279}
+  teleportLocomotionInput: {fileID: 793046973}
+  turnLocomotionInput: {fileID: 1141558000}
   moveDeadzone: 0.2
 --- !u!114 &1269424314
 MonoBehaviour:
@@ -10288,7 +10288,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::WalkingDetector
   hmd: {fileID: 1286100803}
   continuousLocomotionInput: {fileID: 1815029704}
-  teleportLocomotionInput: {fileID: 56142492}
+  teleportLocomotionInput: {fileID: 793046973}
+  turnLocomotionInput: {fileID: 1141558000}
   moveDeadzone: 0.2
   minWalkingSpeed: 0.1
   minWalkingDistance: 0.08
@@ -11260,7 +11261,7 @@ MonoBehaviour:
   analogPressThreshold: 0.8
   readLeftHand: 0
   readRightHand: 1
-  allowKeyboard: 1
+  allowKeyboard: 0
   keyboardKey: 32
 --- !u!114 &1414374910
 MonoBehaviour:

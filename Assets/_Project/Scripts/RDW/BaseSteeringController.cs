@@ -27,7 +27,7 @@ public class BaseSteeringController : MonoBehaviour
     [Header("Fixed curvature mode")]
     [Tooltip("Virtual-world rotation applied per meter of physical walking (degrees per meter). Used only in FixedCurvature mode.")]
     [Min(0f)]
-    public float fixedCurvatureDegPerMeter = 20f;
+    public float fixedCurvatureDegPerMeter = 3f;
 
     [Tooltip("Use +1 or -1 to select the fixed rotation direction. Confirm the intended physical curve direction once in the headset.")]
     public float fixedTurnSign = 1f;

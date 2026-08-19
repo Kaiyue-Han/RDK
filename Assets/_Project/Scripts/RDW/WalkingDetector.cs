@@ -14,6 +14,9 @@ public class WalkingDetector : MonoBehaviour
     [Tooltip("Same action used by teleport locomotion")]
     public InputActionReference teleportLocomotionInput;
 
+    [Tooltip("Same right-stick action used by Continuous Turn Provider")]
+    public InputActionReference turnLocomotionInput;
+
     [Tooltip("Deadzone to avoid stick drift")]
     public float moveDeadzone = 0.2f;
 
@@ -37,6 +40,7 @@ public class WalkingDetector : MonoBehaviour
     public bool IsWalking { get; private set; }
     public float SmoothedSpeed => speedSmoothed;
     public float AccumulatedDistance => accumulatedDistance;
+    public bool IsControllerLocomotionActive { get; private set; }
 
     private Vector2 lastPosXZ;
     private bool hasLastPos;
@@ -54,6 +58,9 @@ public class WalkingDetector : MonoBehaviour
 
         if (teleportLocomotionInput && teleportLocomotionInput.action != null)
             teleportLocomotionInput.action.Enable();
+
+        if (turnLocomotionInput && turnLocomotionInput.action != null)
+            turnLocomotionInput.action.Enable();
     }
 
     private void OnDisable()
@@ -63,6 +70,9 @@ public class WalkingDetector : MonoBehaviour
 
         if (teleportLocomotionInput && teleportLocomotionInput.action != null)
             teleportLocomotionInput.action.Disable();
+
+        if (turnLocomotionInput && turnLocomotionInput.action != null)
+            turnLocomotionInput.action.Disable();
     }
 
     private void Update()
@@ -71,6 +81,7 @@ public class WalkingDetector : MonoBehaviour
         {
             ResetState();
             wasControllerLocomotionLastFrame = false;
+            IsControllerLocomotionActive = false;
             return;
         }
 
@@ -78,7 +89,10 @@ public class WalkingDetector : MonoBehaviour
         Vector2 posXZ = new Vector2(p3.x, p3.z);
 
         bool controllerLocomotionActive =
-            IsContinuousLocomotionActive() || IsTeleportLocomotionActive();
+            IsContinuousLocomotionActive() ||
+            IsTeleportLocomotionActive() ||
+            IsTurnLocomotionActive();
+        IsControllerLocomotionActive = controllerLocomotionActive;
 
         // 1) 手柄移动 / teleport 期间：清零，不累计
         if (controllerLocomotionActive)
@@ -87,6 +101,7 @@ public class WalkingDetector : MonoBehaviour
             lastPosXZ = posXZ;
             hasLastPos = true;
             wasControllerLocomotionLastFrame = true;
+            IsControllerLocomotionActive = true;
 
             if (logDebug)
                 Debug.Log("[WalkingDetector] Controller locomotion active -> reset and ignore frame");
@@ -101,6 +116,7 @@ public class WalkingDetector : MonoBehaviour
             lastPosXZ = posXZ;
             hasLastPos = true;
             wasControllerLocomotionLastFrame = false;
+            IsControllerLocomotionActive = false;
 
             if (logDebug)
                 Debug.Log("[WalkingDetector] Controller locomotion just ended -> rebuild baseline");
@@ -169,6 +185,8 @@ public class WalkingDetector : MonoBehaviour
         accumulatedDistance = 0f;
         holdTimer = 0f;
         IsWalking = false;
+        wasControllerLocomotionLastFrame = false;
+        IsControllerLocomotionActive = false;
     }
 
     private bool IsContinuousLocomotionActive()
@@ -185,7 +203,17 @@ public class WalkingDetector : MonoBehaviour
         if (!teleportLocomotionInput || teleportLocomotionInput.action == null)
             return false;
 
-        return teleportLocomotionInput.action.IsPressed();
+        Vector2 v = teleportLocomotionInput.action.ReadValue<Vector2>();
+        return v.magnitude > moveDeadzone;
+    }
+
+    private bool IsTurnLocomotionActive()
+    {
+        if (!turnLocomotionInput || turnLocomotionInput.action == null)
+            return false;
+
+        Vector2 v = turnLocomotionInput.action.ReadValue<Vector2>();
+        return v.magnitude > moveDeadzone;
     }
 
     private static float SmoothExp(float current, float target, float tau, float dt)
