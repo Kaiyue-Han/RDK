@@ -1,5 +1,6 @@
 using System;
 using UnityEngine;
+using UnityEngine.Serialization;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
 #endif
@@ -38,9 +39,13 @@ public class MaskingEventManager : MonoBehaviour
         }
     }
 
-    [Header("Formal Butterfly Occluder")]
-    [Tooltip("The same butterfly object/layout is used for both Static and Dynamic formal conditions.")]
-    [SerializeField] private MonoBehaviour butterflyOccluderBehaviour;
+    [Header("Formal Butterfly Occluders")]
+    [Tooltip("World-fixed butterfly occluder used only by StaticButterfly40/70.")]
+    [SerializeField] private MonoBehaviour staticButterflyOccluderBehaviour;
+
+    [Tooltip("World-fixed butterfly occluder used only by DynamicButterfly40/70.")]
+    [FormerlySerializedAs("butterflyOccluderBehaviour")]
+    [SerializeField] private MonoBehaviour dynamicButterflyOccluderBehaviour;
 
     [Header("Logging")]
     [SerializeField] private EventLogger logger;
@@ -98,13 +103,16 @@ public class MaskingEventManager : MonoBehaviour
     public float InjectWindowRatio => Mathf.Clamp(injectWindowRatio, 0.01f, 1f);
     public FormalEventTiming CurrentEventTiming { get; private set; }
 
-    private IOccluder butterflyOccluder;
-    private WorldFixedOccluder formalButterflyOccluder;
+    private IOccluder staticButterflyOccluder;
+    private IOccluder dynamicButterflyOccluder;
+    private WorldFixedOccluder staticWorldFixedOccluder;
+    private WorldFixedOccluder dynamicWorldFixedOccluder;
     private IOccluder activeOccluder;
+    private bool currentEventWritesFormalOutputs = true;
 
     private void Awake()
     {
-        RebindOccluder();
+        RebindOccluders();
 
         if (logger == null)
             Debug.LogWarning("[MaskingEventManager] logger not assigned (no csv output).", this);
@@ -112,7 +120,8 @@ public class MaskingEventManager : MonoBehaviour
 
     private void Start()
     {
-        butterflyOccluder?.Hide();
+        staticButterflyOccluder?.Hide();
+        dynamicButterflyOccluder?.Hide();
         activeOccluder = null;
         isOcclusionActive = false;
     }
@@ -139,6 +148,20 @@ public class MaskingEventManager : MonoBehaviour
             $"[MaskingEventManager] Formal condition configured: {BuildCurrentConditionName()}",
             this
         );
+    }
+
+    /// <summary>
+    /// Selects the visual for the separate Training scene without emitting a
+    /// formal reset row. This only prepares the local masking component.
+    /// </summary>
+    public void ConfigureTrainingDemo(TrialOccluderType occluderType, int ratio)
+    {
+        AbortAndResetToIdle("ConfigureTrainingDemo", false);
+
+        currentOccluderType = occluderType;
+        currentOcclusionRatio = IsNoOccluderCondition ? 0 : NormalizeFormalRatio(ratio);
+        isTrialConfigured = true;
+        isTrialRunning = true;
     }
 
     public void StopTrial()
@@ -181,6 +204,20 @@ public class MaskingEventManager : MonoBehaviour
 
     public bool TriggerCurrentOcclusion()
     {
+        return TriggerCurrentOcclusionInternal(true);
+    }
+
+    /// <summary>
+    /// Starts the same authoritative occlusion timeline without writing formal
+    /// experiment context or CSV marks. Intended only for the separate Training scene.
+    /// </summary>
+    public bool TriggerTrainingOcclusion()
+    {
+        return TriggerCurrentOcclusionInternal(false);
+    }
+
+    private bool TriggerCurrentOcclusionInternal(bool writeFormalOutputs)
+    {
         if (!isTrialConfigured || !isTrialRunning || isOcclusionActive)
         {
             Debug.LogWarning(
@@ -191,20 +228,41 @@ public class MaskingEventManager : MonoBehaviour
             return false;
         }
 
-        activeOccluder = IsNoOccluderCondition ? null : butterflyOccluder;
+        WorldFixedOccluder selectedWorldFixedOccluder = null;
+        if (IsNoOccluderCondition)
+        {
+            activeOccluder = null;
+        }
+        else if (currentOccluderType == TrialOccluderType.StaticButterfly)
+        {
+            activeOccluder = staticButterflyOccluder;
+            selectedWorldFixedOccluder = staticWorldFixedOccluder;
+        }
+        else
+        {
+            activeOccluder = dynamicButterflyOccluder;
+            selectedWorldFixedOccluder = dynamicWorldFixedOccluder;
+        }
+
         if (!IsNoOccluderCondition && activeOccluder == null)
         {
-            Debug.LogError("[MaskingEventManager] Formal butterfly occluder is not assigned.", this);
+            Debug.LogError(
+                $"[MaskingEventManager] Occluder is not assigned for {currentOccluderType}.",
+                this
+            );
             return false;
         }
 
         float eventStart = Time.time;
         CurrentEventTiming = CalculateTiming(eventStart);
-        FormalExperimentContext.RecordEventStart(eventStart);
+        currentEventWritesFormalOutputs = writeFormalOutputs;
 
-        if (formalButterflyOccluder != null)
+        if (currentEventWritesFormalOutputs)
+            FormalExperimentContext.RecordEventStart(eventStart);
+
+        if (selectedWorldFixedOccluder != null)
         {
-            formalButterflyOccluder.SetSpatialMotionEnabled(
+            selectedWorldFixedOccluder.SetSpatialMotionEnabled(
                 currentOccluderType == TrialOccluderType.DynamicButterfly
             );
         }
@@ -214,14 +272,17 @@ public class MaskingEventManager : MonoBehaviour
 
         isOcclusionActive = true;
 
-        logger?.Mark(
-            "OCCLUSION_START",
-            this,
-            -1f,
-            $"eventDurationSec={FormalEventDurationSec:F3};" +
-            $"injectionWindowStart={CurrentEventTiming.InjectionWindowStartTime:F3};" +
-            $"injectionWindowEnd={CurrentEventTiming.InjectionWindowEndTime:F3}"
-        );
+        if (currentEventWritesFormalOutputs)
+        {
+            logger?.Mark(
+                "OCCLUSION_START",
+                this,
+                -1f,
+                $"eventDurationSec={FormalEventDurationSec:F3};" +
+                $"injectionWindowStart={CurrentEventTiming.InjectionWindowStartTime:F3};" +
+                $"injectionWindowEnd={CurrentEventTiming.InjectionWindowEndTime:F3}"
+            );
+        }
 
         OnFormalEventStarted?.Invoke(CurrentEventTiming);
         return true;
@@ -238,10 +299,12 @@ public class MaskingEventManager : MonoBehaviour
             OnFormalEventEnding?.Invoke();
 
         activeOccluder?.Hide();
-        butterflyOccluder?.Hide();
+        staticButterflyOccluder?.Hide();
+        dynamicButterflyOccluder?.Hide();
         activeOccluder = null;
         isOcclusionActive = false;
         CurrentEventTiming = default;
+        currentEventWritesFormalOutputs = true;
 
         if (logReset)
             logger?.LogResetEvent("RESET_TO_IDLE", this, resetReason);
@@ -281,25 +344,49 @@ public class MaskingEventManager : MonoBehaviour
 
     private void EndOcclusion()
     {
+        bool writeFormalOutputs = currentEventWritesFormalOutputs;
         OnFormalEventEnding?.Invoke();
 
         activeOccluder?.Hide();
         activeOccluder = null;
         isOcclusionActive = false;
 
-        logger?.Mark("OCCLUSION_END", this);
+        if (writeFormalOutputs)
+            logger?.Mark("OCCLUSION_END", this);
+
+        currentEventWritesFormalOutputs = true;
         OnOcclusionEnded?.Invoke();
     }
 
-    private void RebindOccluder()
+    private void RebindOccluders()
     {
-        butterflyOccluder = butterflyOccluderBehaviour as IOccluder;
-        formalButterflyOccluder = butterflyOccluderBehaviour as WorldFixedOccluder;
+        staticButterflyOccluder = staticButterflyOccluderBehaviour as IOccluder;
+        dynamicButterflyOccluder = dynamicButterflyOccluderBehaviour as IOccluder;
+        staticWorldFixedOccluder = staticButterflyOccluderBehaviour as WorldFixedOccluder;
+        dynamicWorldFixedOccluder = dynamicButterflyOccluderBehaviour as WorldFixedOccluder;
 
-        if (butterflyOccluderBehaviour != null && butterflyOccluder == null)
+        ValidateOccluder(
+            staticButterflyOccluderBehaviour,
+            staticButterflyOccluder,
+            nameof(staticButterflyOccluderBehaviour)
+        );
+        ValidateOccluder(
+            dynamicButterflyOccluderBehaviour,
+            dynamicButterflyOccluder,
+            nameof(dynamicButterflyOccluderBehaviour)
+        );
+    }
+
+    private void ValidateOccluder(
+        MonoBehaviour behaviour,
+        IOccluder occluder,
+        string fieldName
+    )
+    {
+        if (behaviour != null && occluder == null)
         {
             Debug.LogError(
-                "[MaskingEventManager] butterflyOccluderBehaviour must implement IOccluder.",
+                $"[MaskingEventManager] {fieldName} must implement IOccluder.",
                 this
             );
         }

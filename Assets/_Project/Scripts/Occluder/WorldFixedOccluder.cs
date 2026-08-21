@@ -36,6 +36,10 @@ public class WorldFixedOccluder : MonoBehaviour, IOccluder
     [Tooltip("Used only when Fit Legacy Animation To Duration is false.")]
     [SerializeField] private float legacyAnimationSpeed = 1f;
 
+    [Tooltip("Static conditions only. 0 keeps each wing at its initial rotation; 1 preserves the full authored wing rotation amplitude.")]
+    [Range(0f, 1f)]
+    [SerializeField] private float staticWingRotationAmplitude = 0.4f;
+
     [Header("Runtime")]
     [SerializeField] private bool hideOnAwake = true;
 
@@ -44,6 +48,8 @@ public class WorldFixedOccluder : MonoBehaviour, IOccluder
     private readonly List<Vector3> staticAnimationRootPositions = new List<Vector3>();
     private readonly List<Transform> staticRotationRoots = new List<Transform>();
     private readonly List<Quaternion> staticRootRotations = new List<Quaternion>();
+    private readonly List<Transform> staticWingRoots = new List<Transform>();
+    private readonly List<Quaternion> staticWingBaseRotations = new List<Quaternion>();
 
     public bool IsPlaying { get; private set; }
 
@@ -107,6 +113,21 @@ public class WorldFixedOccluder : MonoBehaviour, IOccluder
             if (staticRotationRoots[i] != null)
                 staticRotationRoots[i].localRotation = staticRootRotations[i];
         }
+
+        int wingCount = Mathf.Min(staticWingRoots.Count, staticWingBaseRotations.Count);
+        float wingAmplitude = Mathf.Clamp01(staticWingRotationAmplitude);
+        for (int i = 0; i < wingCount; i++)
+        {
+            Transform wing = staticWingRoots[i];
+            if (wing != null)
+            {
+                wing.localRotation = Quaternion.Slerp(
+                    staticWingBaseRotations[i],
+                    wing.localRotation,
+                    wingAmplitude
+                );
+            }
+        }
     }
 
     private void CaptureStaticAnimationAnchors(GameObject root)
@@ -115,6 +136,8 @@ public class WorldFixedOccluder : MonoBehaviour, IOccluder
         staticAnimationRootPositions.Clear();
         staticRotationRoots.Clear();
         staticRootRotations.Clear();
+        staticWingRoots.Clear();
+        staticWingBaseRotations.Clear();
 
         Animation[] animations = root.GetComponentsInChildren<Animation>(true);
         foreach (Animation anim in animations)
@@ -127,6 +150,27 @@ public class WorldFixedOccluder : MonoBehaviour, IOccluder
 
             Transform butterflyGroup = anim.transform.Find("butterfly_gruppe");
             CaptureStaticPosition(butterflyGroup);
+
+            CaptureStaticWingRotations(anim.transform);
+        }
+    }
+
+    private void CaptureStaticWingRotations(Transform animationRoot)
+    {
+        if (animationRoot == null)
+            return;
+
+        Transform[] descendants = animationRoot.GetComponentsInChildren<Transform>(true);
+        foreach (Transform descendant in descendants)
+        {
+            if (descendant == null)
+                continue;
+
+            if (descendant.name != "left_wing" && descendant.name != "right_wing")
+                continue;
+
+            staticWingRoots.Add(descendant);
+            staticWingBaseRotations.Add(descendant.localRotation);
         }
     }
 
@@ -247,6 +291,8 @@ public class WorldFixedOccluder : MonoBehaviour, IOccluder
         staticAnimationRootPositions.Clear();
         staticRotationRoots.Clear();
         staticRootRotations.Clear();
+        staticWingRoots.Clear();
+        staticWingBaseRotations.Clear();
         IsPlaying = false;
     }
 
@@ -256,8 +302,17 @@ public class WorldFixedOccluder : MonoBehaviour, IOccluder
         foreach (Animation anim in animations)
         {
             if (!anim) continue;
-            anim.Rewind();
-            anim.Sample();
+
+            // Rewind/Sample writes the clip's frame-zero root transform into the
+            // hierarchy. Static butterflies must retain their authored Editor
+            // layout so Show() can capture and lock those positions instead.
+            // Dynamic butterflies still reset to the clip start between events.
+            if (spatialMotionEnabled)
+            {
+                anim.Rewind();
+                anim.Sample();
+            }
+
             anim.Stop();
         }
     }

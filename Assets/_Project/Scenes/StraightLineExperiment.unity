@@ -655,7 +655,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 136dd2745b88bad41b73ff06ba16ad20, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::MaskingEventManager
-  butterflyOccluderBehaviour: {fileID: 1154869565}
+  staticButterflyOccluderBehaviour: {fileID: 407064025}
+  dynamicButterflyOccluderBehaviour: {fileID: 1154869565}
   logger: {fileID: 163978640}
   formalEventDurationSec: 0.85
   injectAt: 0.5
@@ -665,7 +666,7 @@ MonoBehaviour:
   currentOccluderType: 0
   currentOcclusionRatio: 0
   isOcclusionActive: 0
-  enableDebugKeyboardTrigger: 1
+  enableDebugKeyboardTrigger: 0
   debugTriggerKey: 40
   debugBypassTrialState: 0
 --- !u!4 &163978637
@@ -2761,6 +2762,68 @@ Transform:
   - {fileID: 972263564}
   m_Father: {fileID: 1286100803}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1001 &405651114
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 1005845714}
+    m_Modifications:
+    - target: {fileID: 3808907915601296957, guid: 99cba96e96244764288ae732e5833ad4, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 3808907915601296957, guid: 99cba96e96244764288ae732e5833ad4, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 3808907915601296957, guid: 99cba96e96244764288ae732e5833ad4, type: 3}
+      propertyPath: m_LocalPosition.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 3808907915601296957, guid: 99cba96e96244764288ae732e5833ad4, type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 3808907915601296957, guid: 99cba96e96244764288ae732e5833ad4, type: 3}
+      propertyPath: m_LocalRotation.x
+      value: -0
+      objectReference: {fileID: 0}
+    - target: {fileID: 3808907915601296957, guid: 99cba96e96244764288ae732e5833ad4, type: 3}
+      propertyPath: m_LocalRotation.y
+      value: -0
+      objectReference: {fileID: 0}
+    - target: {fileID: 3808907915601296957, guid: 99cba96e96244764288ae732e5833ad4, type: 3}
+      propertyPath: m_LocalRotation.z
+      value: -0
+      objectReference: {fileID: 0}
+    - target: {fileID: 3808907915601296957, guid: 99cba96e96244764288ae732e5833ad4, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 3808907915601296957, guid: 99cba96e96244764288ae732e5833ad4, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 3808907915601296957, guid: 99cba96e96244764288ae732e5833ad4, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 7476194705607933992, guid: 99cba96e96244764288ae732e5833ad4, type: 3}
+      propertyPath: m_Name
+      value: SButterflyGroup
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: 99cba96e96244764288ae732e5833ad4, type: 3}
+--- !u!4 &405651115 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 3808907915601296957, guid: 99cba96e96244764288ae732e5833ad4, type: 3}
+  m_PrefabInstance: {fileID: 405651114}
+  m_PrefabAsset: {fileID: 0}
 --- !u!1 &407064023
 GameObject:
   m_ObjectHideFlags: 0
@@ -2772,12 +2835,12 @@ GameObject:
   - component: {fileID: 407064024}
   - component: {fileID: 407064025}
   m_Layer: 0
-  m_Name: SignOccluder
+  m_Name: StaticOccluder
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!4 &407064024
 Transform:
   m_ObjectHideFlags: 0
@@ -2793,6 +2856,8 @@ Transform:
   m_Children:
   - {fileID: 808105323}
   - {fileID: 1949161961}
+  - {fileID: 1005845714}
+  - {fileID: 1432322822}
   m_Father: {fileID: 1941238742}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &407064025
@@ -2808,16 +2873,17 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::WorldFixedOccluder
   hmd: {fileID: 1286100803}
-  visual40: {fileID: 808105322}
-  visual70: {fileID: 1949161960}
+  visual40: {fileID: 1005845713}
+  visual70: {fileID: 1432322821}
   spawnDistance: 1.4
   heightOffset: 0
   faceUserOnSpawn: 1
   spawnEulerOffset: {x: 0, y: 0, z: 0}
-  playLegacyAnimations: 0
+  playLegacyAnimations: 1
   legacyClipName: Take 001
-  fitLegacyAnimationToDuration: 1
-  legacyAnimationSpeed: 1
+  fitLegacyAnimationToDuration: 0
+  legacyAnimationSpeed: 0.5
+  staticWingRotationAmplitude: 0.3
   hideOnAwake: 1
 --- !u!1 &415119259
 GameObject:
@@ -3708,7 +3774,7 @@ Transform:
   m_GameObject: {fileID: 514358258}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: -25.53026, y: 0.01, z: -50.73045}
+  m_LocalPosition: {x: -25.53026, y: -1.023, z: -50.73045}
   m_LocalScale: {x: 0.7, y: 1, z: 0.7}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -5125,7 +5191,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &808105323
 Transform:
   m_ObjectHideFlags: 0
@@ -5302,7 +5368,7 @@ GameObject:
   m_Component:
   - component: {fileID: 885916087}
   m_Layer: 0
-  m_Name: Butterfly70
+  m_Name: DynamicButterfly70
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -5469,7 +5535,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &899781442
 Transform:
   m_ObjectHideFlags: 0
@@ -5479,7 +5545,7 @@ Transform:
   m_GameObject: {fileID: 899781441}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: -25.53026, y: 0.04, z: -50.73045}
+  m_LocalPosition: {x: -25.53026, y: -0.993, z: -50.73045}
   m_LocalScale: {x: 0.01, y: 0.7, z: 0.7}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -6056,6 +6122,38 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 984629023}
   m_CullTransparentMesh: 1
+--- !u!1 &1005845713
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1005845714}
+  m_Layer: 0
+  m_Name: StaticButterfly40
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1005845714
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1005845713}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 0.9, y: 0.9, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 405651115}
+  m_Father: {fileID: 407064024}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1038689767
 GameObject:
   m_ObjectHideFlags: 0
@@ -6349,7 +6447,7 @@ GameObject:
   m_Component:
   - component: {fileID: 1090324360}
   m_Layer: 0
-  m_Name: Butterfly40
+  m_Name: DynamicButterfly40
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -7017,7 +7115,7 @@ GameObject:
   - component: {fileID: 1154869564}
   - component: {fileID: 1154869565}
   m_Layer: 0
-  m_Name: ButterflyOccluder
+  m_Name: DynamicOccluder
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -7063,6 +7161,7 @@ MonoBehaviour:
   legacyClipName: Take 001
   fitLegacyAnimationToDuration: 1
   legacyAnimationSpeed: 1
+  staticWingRotationAmplitude: 0.4
   hideOnAwake: 1
 --- !u!4 &1170513225 stripped
 Transform:
@@ -8838,7 +8937,7 @@ MonoBehaviour:
   analogPressThreshold: 0.8
   readLeftHand: 0
   readRightHand: 1
-  allowKeyboard: 0
+  allowKeyboard: 1
   keyboardKey: 32
 --- !u!114 &1414374910
 MonoBehaviour:
@@ -9127,7 +9226,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!64 &1422646062
 MeshCollider:
   m_ObjectHideFlags: 0
@@ -9216,11 +9315,43 @@ Transform:
   m_GameObject: {fileID: 1422646061}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0.04, z: 0}
+  m_LocalPosition: {x: 0, y: -1.02, z: 0}
   m_LocalScale: {x: 0.01, y: 0.7, z: 0.7}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1432322821
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1432322822}
+  m_Layer: 0
+  m_Name: StaticButterfly70
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1432322822
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1432322821}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1.2, y: 1.2, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 1754941879}
+  m_Father: {fileID: 407064024}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1440061863
 GameObject:
@@ -10247,9 +10378,11 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ExperimentLauncherController
   complexRouteToggle: {fileID: 0}
   straightRouteToggle: {fileID: 0}
+  trainingToggle: {fileID: 0}
   launcherSceneName: ExperimentLauncher
   complexRouteSceneName: BambergExperiment
   straightRouteSceneName: StraightLineExperiment
+  trainingSceneName: Training
   participantIdInput: {fileID: 0}
   sessionIdInput: {fileID: 0}
   participantIdFallback: 
@@ -10833,6 +10966,68 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f0d133b7a12e5b9478ca791f7e83054b, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Coin
+--- !u!1001 &1754941878
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 1432322822}
+    m_Modifications:
+    - target: {fileID: 1752103414678974870, guid: 59b57a164887ed14bae2872689ac6575, type: 3}
+      propertyPath: m_Name
+      value: SButterflyBigGroup
+      objectReference: {fileID: 0}
+    - target: {fileID: 8411691865026190451, guid: 59b57a164887ed14bae2872689ac6575, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8411691865026190451, guid: 59b57a164887ed14bae2872689ac6575, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8411691865026190451, guid: 59b57a164887ed14bae2872689ac6575, type: 3}
+      propertyPath: m_LocalPosition.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8411691865026190451, guid: 59b57a164887ed14bae2872689ac6575, type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 8411691865026190451, guid: 59b57a164887ed14bae2872689ac6575, type: 3}
+      propertyPath: m_LocalRotation.x
+      value: -0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8411691865026190451, guid: 59b57a164887ed14bae2872689ac6575, type: 3}
+      propertyPath: m_LocalRotation.y
+      value: -0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8411691865026190451, guid: 59b57a164887ed14bae2872689ac6575, type: 3}
+      propertyPath: m_LocalRotation.z
+      value: -0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8411691865026190451, guid: 59b57a164887ed14bae2872689ac6575, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8411691865026190451, guid: 59b57a164887ed14bae2872689ac6575, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8411691865026190451, guid: 59b57a164887ed14bae2872689ac6575, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 0
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: 59b57a164887ed14bae2872689ac6575, type: 3}
+--- !u!4 &1754941879 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 8411691865026190451, guid: 59b57a164887ed14bae2872689ac6575, type: 3}
+  m_PrefabInstance: {fileID: 1754941878}
+  m_PrefabAsset: {fileID: 0}
 --- !u!1001 &1770796353
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -11488,7 +11683,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &1949161961
 Transform:
   m_ObjectHideFlags: 0
@@ -13260,7 +13455,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 7476194705607933992, guid: b354ceda3b09cb846b0204b7cda85b7c, type: 3}
       propertyPath: m_Name
-      value: ButterflyGroup
+      value: DButterflyGroup
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
@@ -13277,7 +13472,7 @@ PrefabInstance:
     m_Modifications:
     - target: {fileID: 1752103414678974870, guid: 2bad4e105ff07aa47b9f929c096d3d02, type: 3}
       propertyPath: m_Name
-      value: ButterflyBigGroup
+      value: DButterflyBigGroup
       objectReference: {fileID: 0}
     - target: {fileID: 8411691865026190451, guid: 2bad4e105ff07aa47b9f929c096d3d02, type: 3}
       propertyPath: m_LocalPosition.x
@@ -13520,12 +13715,12 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 4971484336620453624}
-  m_Enabled: 0
+  m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 5062c3f141a7b254f95c764c5d1ca4ae, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::DebugPlayerMove
-  speed: 2
+  speed: 3
 --- !u!4 &4971484336620453628 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 3110443149590828324, guid: 00c1744d9a40493478c1a6fb206bb968, type: 3}

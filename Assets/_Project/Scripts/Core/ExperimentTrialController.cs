@@ -266,7 +266,7 @@ public class ExperimentTrialController : MonoBehaviour
         }
 
         if (worldRotator != null)
-            worldRotator.AbortCurrentInjectionAndRollback("ABORTED");
+            worldRotator.AbortCurrentInjection("ABORTED");
 
         if (searchFlowController != null)
             searchFlowController.StopSearch("ABORTED");

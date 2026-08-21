@@ -4,6 +4,8 @@ using UnityEngine;
 
 public class RotationInjectionController : MonoBehaviour
 {
+    private const float CompletionToleranceDeg = 0.5f;
+
     [Header("Dependencies")]
     public PlayAreaRectProvider playArea;
     public MaskingEventManager maskingEventManager;
@@ -51,6 +53,13 @@ public class RotationInjectionController : MonoBehaviour
     private float appliedAngle;
     private float signedTheta;
     private float cachedBaseYawRate;
+    private bool graceActive;
+    private float graceStartTime;
+    private float graceStartAppliedAngle;
+    private float graceRemainingAngle;
+    private bool trainingInjectionArmed;
+    private bool currentInjectionIsTraining;
+    private float trainingSignedThetaDeg;
 
     private struct MovementSample
     {
@@ -74,7 +83,6 @@ public class RotationInjectionController : MonoBehaviour
 
     public event Action<float> OnInjectionStarted;
     public event Action<float> OnInjectionCompleted;
-    public event Action<float> OnIncompleteInjectionCancelled;
 
     public float CachedBaseYawRate => cachedBaseYawRate;
     public float LastSignedThetaDeg => signedTheta;
@@ -85,6 +93,7 @@ public class RotationInjectionController : MonoBehaviour
     public float ActualInjectionStartTime => actualInjectionStartTime;
     public float WalkingSpeedAtInjectionMps { get; private set; }
     public float AppliedAngleDeg => appliedAngle;
+    public float RemainingAngleDeg => Mathf.Abs(signedTheta - appliedAngle);
 
     private void Awake()
     {
@@ -151,6 +160,38 @@ public class RotationInjectionController : MonoBehaviour
     }
 
     /// <summary>
+    /// Arms one fixed signed rotation for the next Training event. The rotation
+    /// uses the shared event timing and SmoothStep integration, but bypasses the
+    /// formal walking, base-direction, and movement-congruency gates.
+    /// </summary>
+    public void ArmTrainingInjection(float signedThetaDeg)
+    {
+        CancelActiveInjection("TRAINING_REARM", false);
+
+        trainingSignedThetaDeg = Mathf.Clamp(
+            signedThetaDeg,
+            -Mathf.Abs(thetaHardMax),
+            Mathf.Abs(thetaHardMax)
+        );
+        trainingInjectionArmed = true;
+        currentInjectionIsTraining = false;
+
+        CurrentEvaluationInjectionStarted = false;
+        CurrentEvaluationInjectionCompleted = false;
+        CurrentEvaluationInjectionOutcome = "TRAINING_ARMED";
+        actualInjectionStartTime = float.NaN;
+        WalkingSpeedAtInjectionMps = 0f;
+    }
+
+    public void ClearTrainingInjection(string reason = "TRAINING_RESET")
+    {
+        trainingInjectionArmed = false;
+        trainingSignedThetaDeg = 0f;
+        CancelActiveInjection(reason, false);
+        currentInjectionIsTraining = false;
+    }
+
+    /// <summary>
     /// Used before triggering an occlusion event. It prevents an event from starting
     /// when there is no current base steering or the user's movement is not congruent.
     /// The same checks are repeated at the actual injection point.
@@ -193,6 +234,7 @@ public class RotationInjectionController : MonoBehaviour
         currentEventTiming = timing;
         pendingWindowStart = true;
         active = false;
+        ResetGraceState();
         appliedAngle = 0f;
         signedTheta = 0f;
         actualInjectionStartTime = float.NaN;
@@ -209,7 +251,7 @@ public class RotationInjectionController : MonoBehaviour
 
         if (active)
         {
-            CancelActiveInjection("INCOMPLETE_AT_EVENT_END", true);
+            FinalizeAtHardDeadline(currentEventTiming.EventEndTime);
             return;
         }
 
@@ -229,10 +271,10 @@ public class RotationInjectionController : MonoBehaviour
         {
             pendingWindowStart = false;
 
-            if (now >= currentEventTiming.InjectionWindowEndTime)
+            if (now >= currentEventTiming.EventEndTime)
             {
-                CurrentEvaluationInjectionOutcome = "SKIPPED_MISSED_INJECTION_WINDOW";
-                LogInjectionEvent("INJECTION_SKIPPED_MISSED_WINDOW", 0f);
+                CurrentEvaluationInjectionOutcome = "SKIPPED_EVENT_ENDED_BEFORE_START";
+                LogInjectionEvent("INJECTION_SKIPPED_EVENT_ENDED_BEFORE_START", 0f);
             }
             else
             {
@@ -243,15 +285,21 @@ public class RotationInjectionController : MonoBehaviour
         if (!enableInjection || !active)
             return 0f;
 
-        float windowEnd = currentEventTiming.InjectionWindowEndTime;
-        if (now >= windowEnd)
+        if (now >= currentEventTiming.EventEndTime)
         {
-            // Do not apply a delayed remainder outside the authoritative window.
-            // This can only occur after an execution interruption; the evaluation
-            // is invalidated and retried instead of contaminating the timing.
-            CancelActiveInjection("INCOMPLETE_AT_INJECTION_WINDOW_END", true);
+            FinalizeAtHardDeadline(currentEventTiming.EventEndTime);
             return 0f;
         }
+
+        float windowEnd = currentEventTiming.InjectionWindowEndTime;
+        if (!graceActive && now >= windowEnd)
+            BeginGrace(now);
+
+        if (!active)
+            return 0f;
+
+        if (graceActive)
+            return ComputeGraceYawRate(now, dt);
 
         float interpolationDuration = Mathf.Max(
             windowEnd - actualInjectionStartTime,
@@ -275,12 +323,61 @@ public class RotationInjectionController : MonoBehaviour
         return deltaAngle / Mathf.Max(dt, 1e-4f);
     }
 
+    private void BeginGrace(float now)
+    {
+        float remaining = signedTheta - appliedAngle;
+        if (Mathf.Abs(remaining) <= 0.0001f)
+        {
+            CompleteInjection(now);
+            return;
+        }
+
+        graceActive = true;
+        graceStartTime = Mathf.Max(now, currentEventTiming.InjectionWindowEndTime);
+        graceStartAppliedAngle = appliedAngle;
+        graceRemainingAngle = remaining;
+        CurrentEvaluationInjectionOutcome = "GRACE_CONTINUATION";
+        LogInjectionEvent("INJECTION_GRACE_START", signedTheta);
+    }
+
+    private float ComputeGraceYawRate(float now, float dt)
+    {
+        float hardDeadline = currentEventTiming.EventEndTime;
+        float graceDuration = hardDeadline - graceStartTime;
+        if (graceDuration <= 1e-4f)
+            return 0f;
+
+        float sampleTime = Mathf.Min(now + Mathf.Max(dt, 0f), hardDeadline);
+        float u = Mathf.Clamp01((sampleTime - graceStartTime) / graceDuration);
+        float targetAppliedAngle =
+            graceStartAppliedAngle + graceRemainingAngle * SmoothStep01(u);
+
+        float deltaAngle = targetAppliedAngle - appliedAngle;
+        appliedAngle = targetAppliedAngle;
+
+        if (Mathf.Abs(appliedAngle - signedTheta) <= 0.0001f)
+            CompleteInjection(sampleTime);
+
+        return deltaAngle / Mathf.Max(dt, 1e-4f);
+    }
+
     private void TryStartInjection(float now)
     {
         if (!enableInjection)
         {
+            trainingInjectionArmed = false;
+            currentInjectionIsTraining = false;
             CurrentEvaluationInjectionOutcome = "SKIPPED_DISABLED";
             LogInjectionEvent("INJECTION_SKIPPED_DISABLED", 0f);
+            return;
+        }
+
+        if (trainingInjectionArmed)
+        {
+            float requestedTrainingTheta = trainingSignedThetaDeg;
+            trainingInjectionArmed = false;
+            currentInjectionIsTraining = true;
+            StartInjection(now, requestedTrainingTheta, 0f);
             return;
         }
 
@@ -313,13 +410,25 @@ public class RotationInjectionController : MonoBehaviour
             return;
         }
 
-        signedTheta = Mathf.Clamp(currentEventThetaDeg, 0f, thetaHardMax) * baseSign;
-        active = true;
-        actualInjectionStartTime = now;
-        appliedAngle = 0f;
-        WalkingSpeedAtInjectionMps = walkingDetector != null
+        float requestedTheta = Mathf.Clamp(currentEventThetaDeg, 0f, thetaHardMax) * baseSign;
+        float walkingSpeed = walkingDetector != null
             ? Mathf.Max(0f, walkingDetector.SmoothedSpeed)
             : 0f;
+        StartInjection(now, requestedTheta, walkingSpeed);
+    }
+
+    private void StartInjection(float now, float requestedSignedTheta, float walkingSpeedMps)
+    {
+        signedTheta = Mathf.Clamp(
+            requestedSignedTheta,
+            -Mathf.Abs(thetaHardMax),
+            Mathf.Abs(thetaHardMax)
+        );
+        active = true;
+        ResetGraceState();
+        actualInjectionStartTime = now;
+        appliedAngle = 0f;
+        WalkingSpeedAtInjectionMps = Mathf.Max(0f, walkingSpeedMps);
 
         CurrentEvaluationInjectionStarted = true;
         CurrentEvaluationInjectionOutcome = "STARTED";
@@ -335,41 +444,88 @@ public class RotationInjectionController : MonoBehaviour
         if (!active && CurrentEvaluationInjectionCompleted)
             return;
 
+        bool completedInGrace = graceActive;
         active = false;
         pendingWindowStart = false;
-        appliedAngle = signedTheta;
         CurrentEvaluationInjectionCompleted = true;
-        CurrentEvaluationInjectionOutcome = "COMPLETED";
-        FormalExperimentContext.RecordAppliedTheta(appliedAngle);
+        CurrentEvaluationInjectionOutcome = completedInGrace
+            ? "COMPLETED_IN_GRACE"
+            : "COMPLETED";
+
+        if (!currentInjectionIsTraining)
+            FormalExperimentContext.RecordAppliedTheta(appliedAngle);
+
         LogInjectionEvent("INJECTION_COMPLETE", signedTheta);
         OnInjectionCompleted?.Invoke(completionTime);
+        ResetGraceState();
+        currentInjectionIsTraining = false;
+    }
+
+    private void FinalizeAtHardDeadline(float completionTime)
+    {
+        if (!active || CurrentEvaluationInjectionCompleted)
+            return;
+
+        active = false;
+        pendingWindowStart = false;
+        ResetGraceState();
+
+        float remaining = Mathf.Abs(signedTheta - appliedAngle);
+        if (remaining <= CompletionToleranceDeg)
+        {
+            CurrentEvaluationInjectionCompleted = true;
+            CurrentEvaluationInjectionOutcome = "COMPLETED_WITHIN_TOLERANCE";
+
+            if (!currentInjectionIsTraining)
+                FormalExperimentContext.RecordAppliedTheta(appliedAngle);
+
+            LogInjectionEvent("INJECTION_COMPLETE_WITHIN_TOLERANCE", signedTheta);
+            OnInjectionCompleted?.Invoke(completionTime);
+        }
+        else
+        {
+            CurrentEvaluationInjectionCompleted = false;
+            CurrentEvaluationInjectionOutcome = "INCOMPLETE_HARD_DEADLINE";
+
+            if (!currentInjectionIsTraining)
+                FormalExperimentContext.RecordAppliedTheta(appliedAngle);
+
+            LogInjectionEvent("INJECTION_INCOMPLETE_HARD_DEADLINE", signedTheta);
+        }
+
+        currentInjectionIsTraining = false;
     }
 
     public void CancelActiveInjection(string reason = "CANCELLED", bool logCancellation = true)
     {
-        bool hadActiveState = active || pendingWindowStart;
-        float cancelledAppliedAngle = appliedAngle;
+        bool wasTrainingInjection = currentInjectionIsTraining;
+        bool hadActiveState = active || pendingWindowStart || graceActive;
         active = false;
         pendingWindowStart = false;
+        ResetGraceState();
 
         if (!CurrentEvaluationInjectionCompleted && hadActiveState)
         {
             CurrentEvaluationInjectionOutcome = string.IsNullOrEmpty(reason)
                 ? "CANCELLED"
                 : reason;
-            FormalExperimentContext.RecordAppliedTheta(appliedAngle);
+
+            if (!wasTrainingInjection)
+                FormalExperimentContext.RecordAppliedTheta(appliedAngle);
 
             if (logCancellation)
                 LogInjectionEvent("INJECTION_CANCELLED", signedTheta);
-
-            // Any partial event rotation belongs only to this invalid evaluation.
-            // WorldRotator owns the inverse transform so it can remove that
-            // contribution immediately without touching continuous base steering.
-            if (Mathf.Abs(cancelledAppliedAngle) > 0.0001f)
-                OnIncompleteInjectionCancelled?.Invoke(cancelledAppliedAngle);
-
-            appliedAngle = 0f;
         }
+
+        currentInjectionIsTraining = false;
+    }
+
+    private void ResetGraceState()
+    {
+        graceActive = false;
+        graceStartTime = 0f;
+        graceStartAppliedAngle = 0f;
+        graceRemainingAngle = 0f;
     }
 
     private static float SmoothStep01(float x)
@@ -583,10 +739,14 @@ public class RotationInjectionController : MonoBehaviour
     public void ResetDirectionCache()
     {
         CancelActiveInjection("RESET", false);
+        trainingInjectionArmed = false;
+        currentInjectionIsTraining = false;
+        trainingSignedThetaDeg = 0f;
         cachedBaseYawRate = 0f;
 
         active = false;
         pendingWindowStart = false;
+        ResetGraceState();
         currentEventTiming = default;
         appliedAngle = 0f;
         signedTheta = 0f;
@@ -608,7 +768,12 @@ public class RotationInjectionController : MonoBehaviour
 
     private void LogInjectionEvent(string mark, float value)
     {
-        if (eventLogger == null || maskingEventManager == null)
+        if (
+            currentInjectionIsTraining ||
+            trainingInjectionArmed ||
+            eventLogger == null ||
+            maskingEventManager == null
+        )
             return;
 
         float injectionSign = Mathf.Abs(value) > 0.0001f ? Mathf.Sign(value) : 0f;

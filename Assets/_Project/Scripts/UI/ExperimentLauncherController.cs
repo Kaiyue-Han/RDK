@@ -8,11 +8,13 @@ public class ExperimentLauncherController : MonoBehaviour
     [Header("Route selection")]
     public Toggle complexRouteToggle;
     public Toggle straightRouteToggle;
+    public Toggle trainingToggle;
 
     [Header("Scene names")]
     public string launcherSceneName = "ExperimentLauncher";
     public string complexRouteSceneName = "BambergExperiment";
     public string straightRouteSceneName = "StraightLineExperiment";
+    public string trainingSceneName = "Training";
 
     [Header("Formal identifiers")]
     [Tooltip("Anonymous participant ID. Wire a TMP input field in the launcher for formal data collection.")]
@@ -29,12 +31,28 @@ public class ExperimentLauncherController : MonoBehaviour
     private void Awake()
     {
         // In experiment scenes, the route toggles can stay empty.
-        if (complexRouteToggle == null || straightRouteToggle == null)
+        if (
+            complexRouteToggle == null &&
+            straightRouteToggle == null &&
+            trainingToggle == null
+        )
             return;
 
         // Keep one valid default selection in the launcher scene.
-        if (!complexRouteToggle.isOn && !straightRouteToggle.isOn)
-            complexRouteToggle.isOn = true;
+        bool hasSelection =
+            (complexRouteToggle != null && complexRouteToggle.isOn) ||
+            (straightRouteToggle != null && straightRouteToggle.isOn) ||
+            (trainingToggle != null && trainingToggle.isOn);
+
+        if (!hasSelection)
+        {
+            if (complexRouteToggle != null)
+                complexRouteToggle.isOn = true;
+            else if (straightRouteToggle != null)
+                straightRouteToggle.isOn = true;
+            else if (trainingToggle != null)
+                trainingToggle.isOn = true;
+        }
 
         if (FormalExperimentContext.IsSessionConfigured)
         {
@@ -47,6 +65,13 @@ public class ExperimentLauncherController : MonoBehaviour
 
     public void LoadSelectedExperiment()
     {
+        // Training is deliberately outside the formal participant/session scope.
+        if (trainingToggle != null && trainingToggle.isOn)
+        {
+            LoadScene(trainingSceneName);
+            return;
+        }
+
         if (!EnsureFormalIdentifiers())
             return;
 

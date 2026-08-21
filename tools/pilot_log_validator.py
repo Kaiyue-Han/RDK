@@ -94,6 +94,26 @@ CLEANUP_MARKS = {
     "RESET_TO_IDLE",
 }
 
+# Shared event-based injection policy implemented by RotationInjectionController.
+# Keep this separate from --float-tolerance: 0.01 is useful for CSV rounding and
+# cross-row float comparisons, but it is not the experimental completion rule.
+FORMAL_EVENT_DURATION_SEC = 0.85
+NOMINAL_INJECTION_START_OFFSET_SEC = 0.19125
+NOMINAL_INJECTION_END_OFFSET_SEC = 0.65875
+COMPLETION_TOLERANCE_DEG = 0.5
+
+COMPLETION_MARKS = {
+    "INJECTION_COMPLETE",
+    "INJECTION_COMPLETE_WITHIN_TOLERANCE",
+}
+COMPLETION_OUTCOMES = {
+    "COMPLETED",
+    "COMPLETED_IN_GRACE",
+    "COMPLETED_WITHIN_TOLERANCE",
+}
+HARD_DEADLINE_INCOMPLETE_MARK = "INJECTION_INCOMPLETE_HARD_DEADLINE"
+HARD_DEADLINE_INCOMPLETE_OUTCOME = "INCOMPLETE_HARD_DEADLINE"
+
 STATUS_ORDER = {"PASS": 0, "NOT CHECKABLE": 0, "WARN": 1, "FAIL": 2}
 
 
@@ -360,10 +380,13 @@ def check_identifiers(rows: list[dict[str, str]]) -> CheckResult:
 def check_requested_vs_applied(
     rows: list[dict[str, str]], tolerance: float
 ) -> CheckResult:
-    result = CheckResult("requested theta vs applied theta", "completed injections match the requested absolute theta")
+    result = CheckResult(
+        "requested theta vs applied theta",
+        "valid injection outcomes satisfy the 0.5 deg completion-tolerance policy",
+    )
     checked = 0
     for grouped_rows in group_evaluations(rows).values():
-        complete_rows = [row for row in grouped_rows if mark(row) == "INJECTION_COMPLETE"]
+        complete_rows = [row for row in grouped_rows if mark(row) in COMPLETION_MARKS]
         valid_finish_rows = []
         for row in grouped_rows:
             valid, error = parse_bool(row, "validTrial")
@@ -373,10 +396,10 @@ def check_requested_vs_applied(
                 valid_finish_rows.append(row)
 
         if len(complete_rows) > 1:
-            result.add("FAIL", "duplicate INJECTION_COMPLETE rows", complete_rows[1])
+            result.add("FAIL", "duplicate injection-completion rows", complete_rows[1])
 
         if valid_finish_rows and not complete_rows:
-            result.add("FAIL", "valid evaluation has no INJECTION_COMPLETE row", valid_finish_rows[0])
+            result.add("FAIL", "valid evaluation has no injection-completion row", valid_finish_rows[0])
 
         if not complete_rows:
             continue
@@ -395,21 +418,33 @@ def check_requested_vs_applied(
         if requested is None:
             result.add("FAIL", "requested_theta_deg is missing for completed injection", row)
         if applied is None:
-            result.add("FAIL", "actual_applied_theta_deg is missing on INJECTION_COMPLETE", row)
-        if requested is not None and applied is not None and not almost_equal(abs(applied), abs(requested), tolerance):
-            result.add(
-                "FAIL",
-                f"requested theta {requested:.3f} deg but applied {applied:.3f} deg",
-                row,
-            )
+            result.add("FAIL", "actual_applied_theta_deg is missing on injection completion", row)
+
+        outcome = clean(row.get("injectionOutcome"))
+        if outcome not in COMPLETION_OUTCOMES:
+            result.add("FAIL", f"completion row has unexpected injectionOutcome={outcome!r}", row)
+
+        difference: Optional[float] = None
+        if requested is not None and applied is not None:
+            difference = abs(abs(applied) - abs(requested))
+            if difference > COMPLETION_TOLERANCE_DEG:
+                result.add(
+                    "FAIL",
+                    f"requested/applied difference is {difference:.3f} deg, above the {COMPLETION_TOLERANCE_DEG:.1f} deg completion tolerance",
+                    row,
+                )
+            elif outcome in {"COMPLETED", "COMPLETED_IN_GRACE"} and difference > tolerance:
+                result.add(
+                    "WARN",
+                    f"{outcome} differs from requested theta by {difference:.3f} deg; valid by 0.5 deg policy but unexpected for an exact completion",
+                    row,
+                )
         if requested is not None and signed_requested is not None and not almost_equal(abs(signed_requested), abs(requested), tolerance):
             result.add(
                 "FAIL",
                 f"requested theta {requested:.3f} deg but signedInjectedThetaDeg is {signed_requested:.3f} deg",
                 row,
             )
-        if clean(row.get("injectionOutcome")) != "COMPLETED":
-            result.add("WARN", "INJECTION_COMPLETE row does not report injectionOutcome=COMPLETED", row)
 
     if checked == 0 and not result.issues:
         result.not_checkable_reason = "no completed injection was logged"
@@ -419,7 +454,10 @@ def check_requested_vs_applied(
 def check_injection_timing(
     rows: list[dict[str, str]], tolerance: float
 ) -> CheckResult:
-    result = CheckResult("injection timing", "injection start/completion stay inside the logged event interval")
+    result = CheckResult(
+        "injection timing",
+        "logged injection timing matches the nominal window, grace interval, and 0.85 s hard deadline",
+    )
     checked = 0
     for grouped_rows in group_evaluations(rows).values():
         injection_rows = [row for row in grouped_rows if mark(row) == "INJECTION_START"]
@@ -435,6 +473,8 @@ def check_injection_timing(
             result.add("FAIL", error, source_row)
 
         event_duration: Optional[float] = None
+        logged_window_start: Optional[float] = None
+        logged_window_end: Optional[float] = None
         actual_event_end: Optional[float] = None
         occlusion_start_rows = [row for row in grouped_rows if mark(row) == "OCCLUSION_START"]
         if occlusion_start_rows:
@@ -444,14 +484,32 @@ def check_injection_timing(
                     event_duration = float(raw_duration)
                 except ValueError:
                     result.add("FAIL", f"extra.eventDurationSec is not numeric: {raw_duration!r}", occlusion_start_rows[0])
+            extras = parse_extra(occlusion_start_rows[0])
+            for extra_name, label in (
+                ("injectionWindowStart", "logged_window_start"),
+                ("injectionWindowEnd", "logged_window_end"),
+            ):
+                raw_value = extras.get(extra_name, "")
+                if not raw_value:
+                    result.add("WARN", f"extra.{extra_name} is missing; nominal window cannot be fully checked", occlusion_start_rows[0])
+                    continue
+                try:
+                    value = float(raw_value)
+                except ValueError:
+                    result.add("FAIL", f"extra.{extra_name} is not numeric: {raw_value!r}", occlusion_start_rows[0])
+                    continue
+                if label == "logged_window_start":
+                    logged_window_start = value
+                else:
+                    logged_window_end = value
         end_rows = [row for row in grouped_rows if mark(row) == "OCCLUSION_END"]
         if end_rows:
             actual_event_end, end_error = parse_float(end_rows[-1], "timeSec")
             if end_error:
                 result.add("FAIL", end_error, end_rows[-1])
 
-        if event_duration is not None and not almost_equal(event_duration, 0.85, tolerance):
-            result.add("FAIL", f"formal eventDurationSec is {event_duration:.3f}, expected 0.850", occlusion_start_rows[0])
+        if event_duration is not None and not almost_equal(event_duration, FORMAL_EVENT_DURATION_SEC, tolerance):
+            result.add("FAIL", f"formal eventDurationSec is {event_duration:.3f}, expected {FORMAL_EVENT_DURATION_SEC:.3f}", occlusion_start_rows[0])
 
         nominal_event_end = (
             event_start + event_duration
@@ -465,30 +523,128 @@ def check_injection_timing(
         if nominal_event_end is None:
             result.add("WARN", "event end is unavailable; cannot bound injection against event interval", injection_row)
             continue
-        if event_start is not None and injection_start is not None and injection_start < event_start - tolerance:
-            result.add("FAIL", "injection started before event_start_time_sec", injection_row)
+        expected_window_start = (
+            event_start + NOMINAL_INJECTION_START_OFFSET_SEC
+            if event_start is not None
+            else None
+        )
+        expected_window_end = (
+            event_start + NOMINAL_INJECTION_END_OFFSET_SEC
+            if event_start is not None
+            else None
+        )
+        if logged_window_start is not None and expected_window_start is not None and not almost_equal(logged_window_start, expected_window_start, tolerance):
+            result.add("FAIL", f"logged nominal start {logged_window_start:.3f} != expected {expected_window_start:.3f}", occlusion_start_rows[0])
+        if logged_window_end is not None and expected_window_end is not None and not almost_equal(logged_window_end, expected_window_end, tolerance):
+            result.add("FAIL", f"logged nominal end {logged_window_end:.3f} != expected {expected_window_end:.3f}", occlusion_start_rows[0])
+        window_start = logged_window_start if logged_window_start is not None else expected_window_start
+        window_end = logged_window_end if logged_window_end is not None else expected_window_end
+        if injection_start is not None and window_start is not None and injection_start < window_start - tolerance:
+            result.add("FAIL", "injection started before the nominal injection window", injection_row)
         if injection_start is not None and injection_start > nominal_event_end + tolerance:
             result.add("FAIL", "injection started after the event interval ended", injection_row)
 
-        complete_rows = [row for row in grouped_rows if mark(row) == "INJECTION_COMPLETE"]
+        complete_rows = [row for row in grouped_rows if mark(row) in COMPLETION_MARKS]
         if complete_rows:
             completion_time, completion_error = parse_float(complete_rows[-1], "timeSec")
             if completion_error:
                 result.add("FAIL", completion_error, complete_rows[-1])
             elif completion_time is None:
-                result.add("FAIL", "timeSec is missing on INJECTION_COMPLETE", complete_rows[-1])
+                result.add("FAIL", "timeSec is missing on injection-completion row", complete_rows[-1])
             else:
                 if injection_start is not None and completion_time < injection_start - tolerance:
                     result.add("FAIL", "injection completed before actual injection start", complete_rows[-1])
-                if completion_time > nominal_event_end + tolerance:
+                outcome = clean(complete_rows[-1].get("injectionOutcome"))
+                if outcome == "COMPLETED" and window_end is not None and completion_time > window_end + tolerance:
                     result.add(
                         "FAIL",
-                        f"injection completed at {completion_time:.3f}, after event end {nominal_event_end:.3f}",
+                        f"COMPLETED was logged at {completion_time:.3f}, after nominal window end {window_end:.3f}; expected grace outcome",
+                        complete_rows[-1],
+                    )
+                if outcome == "COMPLETED_IN_GRACE" and window_end is not None and completion_time < window_end - tolerance:
+                    result.add(
+                        "FAIL",
+                        f"COMPLETED_IN_GRACE was logged at {completion_time:.3f}, before nominal window end {window_end:.3f}",
+                        complete_rows[-1],
+                    )
+                if completion_time > nominal_event_end + tolerance:
+                    result.add(
+                        "WARN",
+                        f"completion callback was logged at {completion_time:.3f}, after hard deadline {nominal_event_end:.3f}; CSV has no per-frame rotation trace to prove a post-deadline delta",
                         complete_rows[-1],
                     )
 
     if checked == 0 and not result.issues:
         result.not_checkable_reason = "no INJECTION_START row was logged"
+    return result
+
+
+def check_hard_deadline_incomplete(
+    rows: list[dict[str, str]], tolerance: float
+) -> CheckResult:
+    result = CheckResult(
+        "hard-deadline incomplete injection",
+        "incomplete hard-deadline evaluations are invalid and retain the same planned theta for retry",
+    )
+    checked = 0
+    for grouped_rows in group_evaluations(rows).values():
+        incomplete_rows = [
+            row for row in grouped_rows
+            if mark(row) == HARD_DEADLINE_INCOMPLETE_MARK
+            or clean(row.get("injectionOutcome")) == HARD_DEADLINE_INCOMPLETE_OUTCOME
+        ]
+        if not incomplete_rows:
+            continue
+        checked += 1
+        if len(incomplete_rows) > 1:
+            result.add("FAIL", "duplicate INCOMPLETE_HARD_DEADLINE terminal rows", incomplete_rows[1])
+        terminal = incomplete_rows[0]
+        if clean(terminal.get("injectionOutcome")) != HARD_DEADLINE_INCOMPLETE_OUTCOME:
+            result.add("FAIL", "hard-deadline incomplete mark lacks injectionOutcome=INCOMPLETE_HARD_DEADLINE", terminal)
+        if any(mark(row) in COMPLETION_MARKS for row in grouped_rows):
+            result.add("FAIL", "hard-deadline incomplete evaluation also logged a completion row", terminal)
+
+        requested, requested_row, requested_error = first_number(grouped_rows, "requested_theta_deg")
+        applied, applied_error = parse_float(terminal, "actual_applied_theta_deg")
+        for error, source in ((requested_error, requested_row), (applied_error, terminal)):
+            if error:
+                result.add("FAIL", error, source)
+        if requested is None or applied is None:
+            result.add("FAIL", "hard-deadline incomplete row lacks requested or actual applied theta", terminal)
+        elif abs(abs(requested) - abs(applied)) <= COMPLETION_TOLERANCE_DEG:
+            result.add(
+                "FAIL",
+                f"INCOMPLETE_HARD_DEADLINE has only {abs(abs(requested) - abs(applied)):.3f} deg remaining; it should have completed within tolerance",
+                terminal,
+            )
+
+        finish_rows = [row for row in grouped_rows if mark(row) in EVALUATION_FINISH_MARKS]
+        if not finish_rows:
+            result.add("WARN", "no evaluation finish after INCOMPLETE_HARD_DEADLINE (possibly truncated log)", terminal)
+            continue
+        for finish in finish_rows:
+            valid, valid_error = parse_bool(finish, "validTrial")
+            if valid_error:
+                result.add("FAIL", valid_error, finish)
+            if valid is not False:
+                result.add("FAIL", "INCOMPLETE_HARD_DEADLINE evaluation is not logged as validTrial=false", finish)
+            if clean(finish.get("trial_type")) == "NORMAL":
+                delta, delta_error = parse_float(finish, "staircaseDeltaDeg")
+                test_theta, test_error = parse_float(finish, "testThetaDeg")
+                next_theta, next_error = parse_float(finish, "nextThetaDeg")
+                reversal, reversal_error = parse_bool(finish, "isReversal")
+                for error in (delta_error, test_error, next_error, reversal_error):
+                    if error:
+                        result.add("FAIL", error, finish)
+                if delta is None or not almost_equal(delta, 0.0, tolerance):
+                    result.add("FAIL", "incomplete normal evaluation updated staircaseDeltaDeg", finish)
+                if test_theta is None or next_theta is None or not almost_equal(test_theta, next_theta, tolerance):
+                    result.add("FAIL", "incomplete normal evaluation changed nextThetaDeg", finish)
+                if reversal is not False:
+                    result.add("FAIL", "incomplete normal evaluation is marked as reversal", finish)
+
+    if checked == 0 and not result.issues:
+        result.not_checkable_reason = "no INCOMPLETE_HARD_DEADLINE outcome was logged"
     return result
 
 
@@ -900,6 +1056,7 @@ def validate(
         check_identifiers(rows),
         check_requested_vs_applied(rows, tolerance),
         check_injection_timing(rows, tolerance),
+        check_hard_deadline_incomplete(rows, tolerance),
         check_response_timing(rows, tolerance),
         check_duplicate_responses(rows),
         check_catch_types(rows, tolerance),

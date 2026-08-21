@@ -30,18 +30,6 @@ public class WorldRotator : MonoBehaviour
     public bool IsBaseFrozen => baseFrozen;
     public float FrozenBaseYawRate => frozenBaseYawRate;
 
-    private void Awake()
-    {
-        if (injectionController != null)
-            injectionController.OnIncompleteInjectionCancelled += RollBackCancelledInjection;
-    }
-
-    private void OnDestroy()
-    {
-        if (injectionController != null)
-            injectionController.OnIncompleteInjectionCancelled -= RollBackCancelledInjection;
-    }
-
     private void Update()
     {
         if (virtualWorldRoot == null || hmd == null)
@@ -151,35 +139,17 @@ public class WorldRotator : MonoBehaviour
     }
 
     /// <summary>
-    /// Abort cleanup removes the event-rotation contribution already applied by the
-    /// current evaluation. Continuous base rotation is left intact; Full Reset owns
-    /// restoration of the complete world transform for a new run.
+    /// Abort stops future event rotation without reversing any angle that the
+    /// participant has already experienced. Full Reset separately restores the
+    /// complete world transform when a new run begins.
     /// </summary>
-    public void AbortCurrentInjectionAndRollback(string reason)
+    public void AbortCurrentInjection(string reason)
     {
         if (injectionController == null)
             return;
 
-        // CancelActiveInjection emits the exact partial event angle, if any.
-        // The shared cancellation handler below removes it once and only once.
         injectionController.CancelActiveInjection(reason, true);
         injectionController.ResetDirectionCache();
         UnfreezeBase();
-    }
-
-    private void RollBackCancelledInjection(float appliedEventAngle)
-    {
-        if (
-            virtualWorldRoot == null ||
-            hmd == null ||
-            Mathf.Abs(appliedEventAngle) <= 0.0001f
-        )
-        {
-            return;
-        }
-
-        Vector3 pivot = hmd.position;
-        pivot.y = 0f;
-        virtualWorldRoot.RotateAround(pivot, Vector3.up, -appliedEventAngle);
     }
 }
