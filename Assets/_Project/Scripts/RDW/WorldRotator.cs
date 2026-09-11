@@ -95,10 +95,16 @@ public class WorldRotator : MonoBehaviour
     /// </summary>
     public void FreezeBase()
     {
+        FreezeBase(smoothedBaseYawRate);
+    }
+
+    public void FreezeBase(float yawRateDegPerSec)
+    {
         if (baseFrozen)
             return;
 
-        frozenBaseYawRate = smoothedBaseYawRate;
+        frozenBaseYawRate = yawRateDegPerSec;
+        smoothedBaseYawRate = yawRateDegPerSec;
         baseFrozen = true;
     }
 

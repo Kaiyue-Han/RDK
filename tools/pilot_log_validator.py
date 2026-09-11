@@ -38,8 +38,15 @@ EXPECTED_FIELDS = [
     "response_accepted",
     "walking_speed_trigger_mps",
     "walking_speed_injection_mps",
+    "pre_event_mean_speed_mps",
+    "pre_event_min_speed_mps",
+    "during_event_mean_speed_mps",
+    "during_event_min_speed_mps",
+    "post_event_mean_speed_mps",
+    "post_event_min_speed_mps",
     "user_turn_congruency",
     "actual_applied_theta_deg",
+    "applied_theta_at_response_deg",
     "sceneName",
     "conditionKey",
     "anchorMode",
@@ -111,6 +118,8 @@ COMPLETION_OUTCOMES = {
     "COMPLETED_IN_GRACE",
     "COMPLETED_WITHIN_TOLERANCE",
 }
+ACCEPTED_RESPONSE_STOP_MARK = "INJECTION_STOPPED_AFTER_ACCEPTED_RESPONSE"
+ACCEPTED_RESPONSE_STOP_OUTCOME = "STOPPED_AFTER_ACCEPTED_RESPONSE"
 HARD_DEADLINE_INCOMPLETE_MARK = "INJECTION_INCOMPLETE_HARD_DEADLINE"
 HARD_DEADLINE_INCOMPLETE_OUTCOME = "INCOMPLETE_HARD_DEADLINE"
 
@@ -387,6 +396,11 @@ def check_requested_vs_applied(
     checked = 0
     for grouped_rows in group_evaluations(rows).values():
         complete_rows = [row for row in grouped_rows if mark(row) in COMPLETION_MARKS]
+        response_stop_rows = [
+            row for row in grouped_rows
+            if mark(row) == ACCEPTED_RESPONSE_STOP_MARK
+        ]
+        conclusive_rows = complete_rows + response_stop_rows
         valid_finish_rows = []
         for row in grouped_rows:
             valid, error = parse_bool(row, "validTrial")
@@ -395,17 +409,17 @@ def check_requested_vs_applied(
             if mark(row) in EVALUATION_FINISH_MARKS and valid is True:
                 valid_finish_rows.append(row)
 
-        if len(complete_rows) > 1:
-            result.add("FAIL", "duplicate injection-completion rows", complete_rows[1])
+        if len(conclusive_rows) > 1:
+            result.add("FAIL", "duplicate injection-conclusion rows", conclusive_rows[1])
 
-        if valid_finish_rows and not complete_rows:
-            result.add("FAIL", "valid evaluation has no injection-completion row", valid_finish_rows[0])
+        if valid_finish_rows and not conclusive_rows:
+            result.add("FAIL", "valid evaluation has no injection-conclusion row", valid_finish_rows[0])
 
-        if not complete_rows:
+        if not conclusive_rows:
             continue
 
         checked += 1
-        row = complete_rows[0]
+        row = conclusive_rows[0]
         requested, requested_row, error = first_number(grouped_rows, "requested_theta_deg")
         if error:
             result.add("FAIL", error, requested_row)
@@ -421,13 +435,46 @@ def check_requested_vs_applied(
             result.add("FAIL", "actual_applied_theta_deg is missing on injection completion", row)
 
         outcome = clean(row.get("injectionOutcome"))
-        if outcome not in COMPLETION_OUTCOMES:
-            result.add("FAIL", f"completion row has unexpected injectionOutcome={outcome!r}", row)
+        is_response_stop = mark(row) == ACCEPTED_RESPONSE_STOP_MARK
+        expected_outcomes = COMPLETION_OUTCOMES | {ACCEPTED_RESPONSE_STOP_OUTCOME}
+        if outcome not in expected_outcomes:
+            result.add("FAIL", f"conclusion row has unexpected injectionOutcome={outcome!r}", row)
+
+        if is_response_stop:
+            response_rows = [
+                candidate for candidate in grouped_rows
+                if mark(candidate) == "RESPONSE_ACCEPTED"
+            ]
+            response_row = response_rows[0] if response_rows else row
+            accepted, accepted_error = parse_bool(response_row, "response_accepted")
+            noticed, noticed_error = parse_bool(response_row, "noticed")
+            response_angle, response_angle_error = parse_float(
+                response_row, "applied_theta_at_response_deg"
+            )
+            for parse_error in (accepted_error, noticed_error, response_angle_error):
+                if parse_error:
+                    result.add("FAIL", parse_error, row)
+            if accepted is not True or noticed is not True:
+                result.add(
+                    "FAIL",
+                    "response-stopped injection must belong to an accepted noticed evaluation",
+                    response_row,
+                )
+            if response_angle is None:
+                result.add("FAIL", "response-stopped injection lacks applied theta at response", response_row)
+            elif applied is not None and not almost_equal(response_angle, applied, tolerance):
+                result.add(
+                    "FAIL",
+                    "applied theta at response differs from terminal actual applied theta",
+                    row,
+                )
 
         difference: Optional[float] = None
         if requested is not None and applied is not None:
             difference = abs(abs(applied) - abs(requested))
-            if difference > COMPLETION_TOLERANCE_DEG:
+            if is_response_stop and abs(applied) > abs(requested) + tolerance:
+                result.add("FAIL", "response-time applied theta exceeds requested theta", row)
+            elif not is_response_stop and difference > COMPLETION_TOLERANCE_DEG:
                 result.add(
                     "FAIL",
                     f"requested/applied difference is {difference:.3f} deg, above the {COMPLETION_TOLERANCE_DEG:.1f} deg completion tolerance",
@@ -447,7 +494,7 @@ def check_requested_vs_applied(
             )
 
     if checked == 0 and not result.issues:
-        result.not_checkable_reason = "no completed injection was logged"
+        result.not_checkable_reason = "no completed or accepted-response-stopped injection was logged"
     return result
 
 
@@ -651,7 +698,7 @@ def check_hard_deadline_incomplete(
 def check_response_timing(
     rows: list[dict[str, str]], tolerance: float
 ) -> CheckResult:
-    result = CheckResult("response timing and RT", "accepted responses use actual injection start and remain inside the 3.0 s deadline")
+    result = CheckResult("response timing and RT", "accepted responses use actual injection start and remain inside the 2.0 s deadline")
     checked = 0
     for grouped_rows in group_evaluations(rows).values():
         accepted_rows = [row for row in grouped_rows if mark(row) == "RESPONSE_ACCEPTED"]
@@ -682,8 +729,8 @@ def check_response_timing(
                 continue
             assert injection_start is not None and deadline is not None
             assert response_time is not None and response_rt is not None
-            if not almost_equal(deadline - injection_start, 3.0, tolerance):
-                result.add("FAIL", f"response window is {deadline - injection_start:.3f} s, expected 3.000 s", row)
+            if not almost_equal(deadline - injection_start, 2.0, tolerance):
+                result.add("FAIL", f"response window is {deadline - injection_start:.3f} s, expected 2.000 s", row)
             expected_rt = response_time - injection_start
             if response_rt < -tolerance or expected_rt < -tolerance:
                 result.add("FAIL", f"negative response time: RT={response_rt:.3f} s", row)
@@ -709,8 +756,8 @@ def check_response_timing(
             if injection_start is None or deadline is None or row_time is None:
                 result.add("FAIL", "timeout row is missing injection/deadline/current timestamp", row)
                 continue
-            if not almost_equal(deadline - injection_start, 3.0, tolerance):
-                result.add("FAIL", f"response window is {deadline - injection_start:.3f} s, expected 3.000 s", row)
+            if not almost_equal(deadline - injection_start, 2.0, tolerance):
+                result.add("FAIL", f"response window is {deadline - injection_start:.3f} s, expected 2.000 s", row)
             if row_time < deadline - tolerance:
                 result.add("FAIL", "RESPONSE_TIMEOUT was logged before response deadline", row)
 
@@ -953,8 +1000,9 @@ def check_walking_speed(rows: list[dict[str, str]], warn_threshold: float) -> Ch
     )
     starts = [row for row in rows if mark(row) in EVALUATION_START_MARKS]
     injections = [row for row in rows if mark(row) == "INJECTION_START"]
-    if not starts and not injections:
-        result.not_checkable_reason = "no evaluation/injection start was logged"
+    summaries = [row for row in rows if mark(row) == "WALKING_SPEED_SUMMARY"]
+    if not starts and not injections and not summaries:
+        result.not_checkable_reason = "no evaluation, injection, or walking-speed summary was logged"
         return result
 
     for row in starts:
@@ -970,8 +1018,35 @@ def check_walking_speed(rows: list[dict[str, str]], warn_threshold: float) -> Ch
         elif value is None:
             result.add("FAIL", "walking_speed_injection_mps is missing on injection start", row)
 
+    summary_fields = (
+        "pre_event_mean_speed_mps",
+        "pre_event_min_speed_mps",
+        "during_event_mean_speed_mps",
+        "during_event_min_speed_mps",
+        "post_event_mean_speed_mps",
+        "post_event_min_speed_mps",
+    )
+    for row in summaries:
+        for field_name in summary_fields:
+            value, error = parse_float(row, field_name)
+            if error:
+                result.add("FAIL", error, row)
+            elif value is None:
+                result.add("FAIL", f"{field_name} is missing on walking-speed summary", row)
+
+        for mean_field, min_field in (
+            ("pre_event_mean_speed_mps", "pre_event_min_speed_mps"),
+            ("during_event_mean_speed_mps", "during_event_min_speed_mps"),
+            ("post_event_mean_speed_mps", "post_event_min_speed_mps"),
+        ):
+            mean_value, _ = parse_float(row, mean_field)
+            min_value, _ = parse_float(row, min_field)
+            if mean_value is not None and min_value is not None and min_value > mean_value + 1e-6:
+                result.add("FAIL", f"{min_field} exceeds {mean_field}", row)
+
+    all_speed_fields = ("walking_speed_trigger_mps", "walking_speed_injection_mps") + summary_fields
     for row in rows:
-        for field_name in ("walking_speed_trigger_mps", "walking_speed_injection_mps"):
+        for field_name in all_speed_fields:
             value, error = parse_float(row, field_name)
             if error:
                 result.add("FAIL", error, row)

@@ -15,6 +15,11 @@ public class Coin : MonoBehaviour
 
     public void Init(CoinSequenceManager mgr, int index)
     {
+        PrepareForCollection(mgr, index);
+    }
+
+    public void PrepareForCollection(CoinSequenceManager mgr, int index)
+    {
         manager = mgr;
         coinIndex = index;
         collected = false;

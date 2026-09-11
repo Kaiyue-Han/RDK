@@ -10,6 +10,7 @@ public class RotationInjectionController : MonoBehaviour
     public PlayAreaRectProvider playArea;
     public MaskingEventManager maskingEventManager;
     public WalkingDetector walkingDetector;
+    public CoinSequenceManager straightRouteManager;
 
     [Header("Logging")]
     public EventLogger eventLogger;
@@ -20,7 +21,7 @@ public class RotationInjectionController : MonoBehaviour
     [Tooltip("Current experiment-driven event theta (deg). No longer derived from boundary distance.")]
     public float currentEventThetaDeg = 10f;
 
-    public float thetaHardMax = 25f;
+    public float thetaHardMax = 15f;
 
     [Header("Current base direction gate")]
     [Tooltip("Event injection is allowed only when the CURRENT base yaw-rate magnitude reaches this value.")]
@@ -79,10 +80,13 @@ public class RotationInjectionController : MonoBehaviour
     // evaluation was valid. A skipped injection must not update theta.
     public bool CurrentEvaluationInjectionStarted { get; private set; } = false;
     public bool CurrentEvaluationInjectionCompleted { get; private set; } = false;
+    public bool CurrentEvaluationStoppedAfterAcceptedResponse { get; private set; } = false;
+    public bool CurrentEvaluationConcludedByAcceptedResponse { get; private set; } = false;
     public string CurrentEvaluationInjectionOutcome { get; private set; } = "NONE";
 
     public event Action<float> OnInjectionStarted;
     public event Action<float> OnInjectionCompleted;
+    public event Action<string> OnEvaluationInvalidated;
 
     public float CachedBaseYawRate => cachedBaseYawRate;
     public float LastSignedThetaDeg => signedTheta;
@@ -92,6 +96,9 @@ public class RotationInjectionController : MonoBehaviour
     public string DebugMovementCongruenceState => debugMovementCongruenceState;
     public float ActualInjectionStartTime => actualInjectionStartTime;
     public float WalkingSpeedAtInjectionMps { get; private set; }
+    public float CurrentWalkingSpeedMps => walkingDetector != null
+        ? Mathf.Max(0f, walkingDetector.SmoothedSpeed)
+        : 0f;
     public float AppliedAngleDeg => appliedAngle;
     public float RemainingAngleDeg => Mathf.Abs(signedTheta - appliedAngle);
 
@@ -118,12 +125,23 @@ public class RotationInjectionController : MonoBehaviour
         SamplePhysicalMovement();
 
         if (
-            (active || pendingWindowStart) &&
+            CurrentEvaluationInjectionStarted &&
+            !CurrentEvaluationConcludedByAcceptedResponse &&
             walkingDetector != null &&
             walkingDetector.IsControllerLocomotionActive
         )
         {
-            CancelActiveInjection("CANCELLED_ARTIFICIAL_LOCOMOTION", true);
+            InvalidateCurrentEvaluation("CANCELLED_ARTIFICIAL_LOCOMOTION");
+        }
+
+        if (
+            CurrentEvaluationInjectionStarted &&
+            !CurrentEvaluationConcludedByAcceptedResponse &&
+            straightRouteManager != null &&
+            straightRouteManager.IsTurnaroundInProgress
+        )
+        {
+            InvalidateCurrentEvaluation("CANCELLED_ROUTE_TURNAROUND");
         }
     }
 
@@ -132,6 +150,8 @@ public class RotationInjectionController : MonoBehaviour
         CancelActiveInjection("NEW_EVALUATION", false);
         CurrentEvaluationInjectionStarted = false;
         CurrentEvaluationInjectionCompleted = false;
+        CurrentEvaluationStoppedAfterAcceptedResponse = false;
+        CurrentEvaluationConcludedByAcceptedResponse = false;
         CurrentEvaluationInjectionOutcome = "WAITING_FOR_EVENT";
         actualInjectionStartTime = float.NaN;
         WalkingSpeedAtInjectionMps = 0f;
@@ -178,6 +198,8 @@ public class RotationInjectionController : MonoBehaviour
 
         CurrentEvaluationInjectionStarted = false;
         CurrentEvaluationInjectionCompleted = false;
+        CurrentEvaluationStoppedAfterAcceptedResponse = false;
+        CurrentEvaluationConcludedByAcceptedResponse = false;
         CurrentEvaluationInjectionOutcome = "TRAINING_ARMED";
         actualInjectionStartTime = float.NaN;
         WalkingSpeedAtInjectionMps = 0f;
@@ -201,6 +223,9 @@ public class RotationInjectionController : MonoBehaviour
         candidateSignedThetaDeg = 0f;
 
         if (!enableInjection)
+            return false;
+
+        if (straightRouteManager != null && straightRouteManager.BlocksFormalEvents)
             return false;
 
         if (walkingDetector != null && !walkingDetector.IsWalking)
@@ -241,6 +266,8 @@ public class RotationInjectionController : MonoBehaviour
         WalkingSpeedAtInjectionMps = 0f;
         CurrentEvaluationInjectionStarted = false;
         CurrentEvaluationInjectionCompleted = false;
+        CurrentEvaluationStoppedAfterAcceptedResponse = false;
+        CurrentEvaluationConcludedByAcceptedResponse = false;
         CurrentEvaluationInjectionOutcome = "WAITING_FOR_INJECTION_WINDOW";
     }
 
@@ -372,6 +399,13 @@ public class RotationInjectionController : MonoBehaviour
             return;
         }
 
+        if (straightRouteManager != null && straightRouteManager.IsTurnaroundInProgress)
+        {
+            CurrentEvaluationInjectionOutcome = "SKIPPED_ROUTE_TURNAROUND";
+            LogInjectionEvent("INJECTION_SKIPPED_ROUTE_TURNAROUND", 0f);
+            return;
+        }
+
         if (trainingInjectionArmed)
         {
             float requestedTrainingTheta = trainingSignedThetaDeg;
@@ -459,6 +493,86 @@ public class RotationInjectionController : MonoBehaviour
         OnInjectionCompleted?.Invoke(completionTime);
         ResetGraceState();
         currentInjectionIsTraining = false;
+    }
+
+    /// <summary>
+    /// Concludes a formal noticed evaluation at the angle already presented when
+    /// the participant response is accepted. The planned theta remains the
+    /// staircase stimulus; the response-time angle is logged separately.
+    /// </summary>
+    public bool TryStopAfterAcceptedResponse(out float appliedThetaAtResponseDeg)
+    {
+        appliedThetaAtResponseDeg = appliedAngle;
+
+        if (!CurrentEvaluationInjectionStarted || currentInjectionIsTraining)
+            return false;
+
+        // Update() normally processes these invalidating states before the
+        // response is consumed in LateUpdate. Recheck them here so the ordering
+        // remains safe if Unity script execution order changes.
+        if (
+            walkingDetector != null &&
+            walkingDetector.IsControllerLocomotionActive
+        )
+        {
+            InvalidateCurrentEvaluation("CANCELLED_ARTIFICIAL_LOCOMOTION");
+            return false;
+        }
+
+        if (
+            straightRouteManager != null &&
+            straightRouteManager.IsTurnaroundInProgress
+        )
+        {
+            InvalidateCurrentEvaluation("CANCELLED_ROUTE_TURNAROUND");
+            return false;
+        }
+
+        CurrentEvaluationConcludedByAcceptedResponse = true;
+
+        if (CurrentEvaluationInjectionCompleted)
+            return true;
+
+        if (!active)
+            return false;
+
+        active = false;
+        pendingWindowStart = false;
+        ResetGraceState();
+
+        CurrentEvaluationStoppedAfterAcceptedResponse = true;
+        CurrentEvaluationInjectionOutcome = "STOPPED_AFTER_ACCEPTED_RESPONSE";
+        FormalExperimentContext.RecordAppliedTheta(appliedAngle);
+        LogInjectionEvent("INJECTION_STOPPED_AFTER_ACCEPTED_RESPONSE", signedTheta);
+        currentInjectionIsTraining = false;
+        return true;
+    }
+
+    private void InvalidateCurrentEvaluation(string reason)
+    {
+        if (
+            !CurrentEvaluationInjectionStarted ||
+            CurrentEvaluationConcludedByAcceptedResponse
+        )
+            return;
+
+        active = false;
+        pendingWindowStart = false;
+        ResetGraceState();
+
+        CurrentEvaluationInjectionStarted = false;
+        CurrentEvaluationInjectionCompleted = false;
+        CurrentEvaluationStoppedAfterAcceptedResponse = false;
+        CurrentEvaluationInjectionOutcome = string.IsNullOrEmpty(reason)
+            ? "CANCELLED"
+            : reason;
+
+        if (!currentInjectionIsTraining)
+            FormalExperimentContext.RecordAppliedTheta(appliedAngle);
+
+        LogInjectionEvent("INJECTION_CANCELLED", signedTheta);
+        currentInjectionIsTraining = false;
+        OnEvaluationInvalidated?.Invoke(CurrentEvaluationInjectionOutcome);
     }
 
     private void FinalizeAtHardDeadline(float completionTime)
@@ -760,6 +874,8 @@ public class RotationInjectionController : MonoBehaviour
 
         CurrentEvaluationInjectionStarted = false;
         CurrentEvaluationInjectionCompleted = false;
+        CurrentEvaluationStoppedAfterAcceptedResponse = false;
+        CurrentEvaluationConcludedByAcceptedResponse = false;
         CurrentEvaluationInjectionOutcome = "RESET";
 
         if (logDebug)

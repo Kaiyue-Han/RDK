@@ -6,8 +6,70 @@ using UnityEngine.SceneManagement;
 
 public class EventLogger : MonoBehaviour
 {
+    public readonly struct EvaluationSnapshot
+    {
+        public readonly string ParticipantId;
+        public readonly string SessionId;
+        public readonly string RunId;
+        public readonly string TrialId;
+        public readonly string EvaluationId;
+        public readonly string TrialType;
+        public readonly bool IsCatch;
+        public readonly string CatchType;
+        public readonly float RequestedThetaDeg;
+        public readonly float EventStartTime;
+        public readonly float InjectionStartTime;
+        public readonly float ResponseDeadlineTime;
+        public readonly float ResponseTime;
+        public readonly float ResponseRtSec;
+        public readonly bool? ResponseAccepted;
+        public readonly float WalkingSpeedAtTriggerMps;
+        public readonly float WalkingSpeedAtInjectionMps;
+        public readonly string UserTurnCongruency;
+        public readonly float ActualAppliedThetaDeg;
+        public readonly float AppliedThetaAtResponseDeg;
+        public readonly string SceneName;
+        public readonly string ConditionKey;
+        public readonly string AnchorMode;
+        public readonly string MotionMode;
+        public readonly string OccluderName;
+        public readonly string OcclusionRatio;
+
+        public EvaluationSnapshot(MaskingEventManager maskingEventManager)
+        {
+            ParticipantId = FormalExperimentContext.ParticipantId;
+            SessionId = FormalExperimentContext.SessionId;
+            RunId = FormalExperimentContext.RunId;
+            TrialId = FormalExperimentContext.TrialId;
+            EvaluationId = FormalExperimentContext.EvaluationId;
+            TrialType = FormalExperimentContext.TrialType;
+            IsCatch = FormalExperimentContext.IsCatch;
+            CatchType = FormalExperimentContext.CatchType;
+            RequestedThetaDeg = FormalExperimentContext.RequestedThetaDeg;
+            EventStartTime = FormalExperimentContext.EventStartTime;
+            InjectionStartTime = FormalExperimentContext.InjectionStartTime;
+            ResponseDeadlineTime = FormalExperimentContext.ResponseDeadlineTime;
+            ResponseTime = FormalExperimentContext.ResponseTime;
+            ResponseRtSec = FormalExperimentContext.ResponseRtSec;
+            ResponseAccepted = FormalExperimentContext.ResponseAccepted;
+            WalkingSpeedAtTriggerMps = FormalExperimentContext.WalkingSpeedAtTriggerMps;
+            WalkingSpeedAtInjectionMps = FormalExperimentContext.WalkingSpeedAtInjectionMps;
+            UserTurnCongruency = FormalExperimentContext.UserTurnCongruency;
+            ActualAppliedThetaDeg = FormalExperimentContext.ActualAppliedThetaDeg;
+            AppliedThetaAtResponseDeg = FormalExperimentContext.AppliedThetaAtResponseDeg;
+            SceneName = SceneManager.GetActiveScene().name;
+            ConditionKey = maskingEventManager != null ? maskingEventManager.CurrentConditionKey : "Unknown";
+            AnchorMode = maskingEventManager != null ? maskingEventManager.CurrentAnchorModeName : "";
+            MotionMode = maskingEventManager != null ? maskingEventManager.CurrentMotionModeName : "";
+            OccluderName = maskingEventManager != null ? maskingEventManager.CurrentVisualName : "";
+            OcclusionRatio = maskingEventManager != null
+                ? maskingEventManager.CurrentOcclusionRatio.ToString(CultureInfo.InvariantCulture)
+                : "";
+        }
+    }
+
     private const string Header =
-        "utc,mark,participant_id,session_id,run_id,trial_id,evaluation_id,trial_type,is_catch,catch_type,requested_theta_deg,event_start_time_sec,injection_start_time_sec,response_deadline_time_sec,response_time_sec,response_rt_sec,response_accepted,walking_speed_trigger_mps,walking_speed_injection_mps,user_turn_congruency,actual_applied_theta_deg,sceneName,conditionKey,anchorMode,motionMode,occluderName,occlusionRatio,timeSec,success,testThetaDeg,noticed,validTrial,invalidReason,currentStepDeg,staircaseDeltaDeg,nextThetaDeg,isReversal,reversalIndex,reversalCount,estimatedThresholdDeg,usedReversals,allReversals,baseYawRateAtInjection,injectionSign,signedInjectedThetaDeg,injectionOutcome,resetReason,extra";
+        "utc,mark,participant_id,session_id,run_id,trial_id,evaluation_id,trial_type,is_catch,catch_type,requested_theta_deg,event_start_time_sec,injection_start_time_sec,response_deadline_time_sec,response_time_sec,response_rt_sec,response_accepted,walking_speed_trigger_mps,walking_speed_injection_mps,pre_event_mean_speed_mps,pre_event_min_speed_mps,during_event_mean_speed_mps,during_event_min_speed_mps,post_event_mean_speed_mps,post_event_min_speed_mps,user_turn_congruency,actual_applied_theta_deg,applied_theta_at_response_deg,sceneName,conditionKey,anchorMode,motionMode,occluderName,occlusionRatio,timeSec,success,testThetaDeg,noticed,validTrial,invalidReason,currentStepDeg,staircaseDeltaDeg,nextThetaDeg,isReversal,reversalIndex,reversalCount,estimatedThresholdDeg,usedReversals,allReversals,baseYawRateAtInjection,injectionSign,signedInjectedThetaDeg,injectionOutcome,resetReason,extra";
 
     private string csvPath;
 
@@ -15,6 +77,12 @@ public class EventLogger : MonoBehaviour
     {
         public string mark;
         public string actualAppliedThetaDeg;
+        public string preEventMeanSpeedMps;
+        public string preEventMinSpeedMps;
+        public string duringEventMeanSpeedMps;
+        public string duringEventMinSpeedMps;
+        public string postEventMeanSpeedMps;
+        public string postEventMinSpeedMps;
         public string sceneName;
         public string conditionKey;
         public string anchorMode;
@@ -41,6 +109,7 @@ public class EventLogger : MonoBehaviour
         public string injectionOutcome;
         public string resetReason;
         public string extra;
+        public EvaluationSnapshot? evaluationSnapshot;
     }
 
     private void Awake()
@@ -117,6 +186,36 @@ public class EventLogger : MonoBehaviour
         LogRow row = CreateConditionRow(mark, maskingEventManager);
         row.resetReason = resetReason;
         row.extra = extra;
+        WriteRow(row);
+    }
+
+    public void LogWalkingSpeedSummary(
+        MaskingEventManager maskingEventManager,
+        EvaluationSnapshot evaluationSnapshot,
+        float preMean,
+        float preMin,
+        float duringMean,
+        float duringMin,
+        float postMean,
+        float postMin,
+        float preWindowSec,
+        float eventWindowSec,
+        float postWindowSec
+    )
+    {
+        LogRow row = CreateConditionRow("WALKING_SPEED_SUMMARY", maskingEventManager);
+        row.evaluationSnapshot = evaluationSnapshot;
+        row.preEventMeanSpeedMps = FormatFloat(preMean);
+        row.preEventMinSpeedMps = FormatFloat(preMin);
+        row.duringEventMeanSpeedMps = FormatFloat(duringMean);
+        row.duringEventMinSpeedMps = FormatFloat(duringMin);
+        row.postEventMeanSpeedMps = FormatFloat(postMean);
+        row.postEventMinSpeedMps = FormatFloat(postMin);
+        row.extra =
+            $"preWindowSec={FormatFloat(preWindowSec)};" +
+            $"eventWindowSec={FormatFloat(eventWindowSec)};" +
+            $"postWindowSec={FormatFloat(postWindowSec)};" +
+            "speedSource=WalkingDetector.SmoothedSpeed";
         WriteRow(row);
     }
 
@@ -227,7 +326,18 @@ public class EventLogger : MonoBehaviour
     {
         EnsureHeader();
 
-        if (string.IsNullOrEmpty(row.sceneName))
+        EvaluationSnapshot? snapshot = row.evaluationSnapshot;
+
+        if (snapshot.HasValue)
+        {
+            row.sceneName = snapshot.Value.SceneName;
+            row.conditionKey = snapshot.Value.ConditionKey;
+            row.anchorMode = snapshot.Value.AnchorMode;
+            row.motionMode = snapshot.Value.MotionMode;
+            row.occluderName = snapshot.Value.OccluderName;
+            row.occlusionRatio = snapshot.Value.OcclusionRatio;
+        }
+        else if (string.IsNullOrEmpty(row.sceneName))
             row.sceneName = SceneManager.GetActiveScene().name;
 
         string utc = DateTime.UtcNow.ToString("o");
@@ -237,29 +347,36 @@ public class EventLogger : MonoBehaviour
         {
             utc,
             row.mark,
-            FormalExperimentContext.ParticipantId,
-            FormalExperimentContext.SessionId,
-            FormalExperimentContext.RunId,
-            FormalExperimentContext.TrialId,
-            FormalExperimentContext.EvaluationId,
-            FormalExperimentContext.TrialType,
-            BoolString(FormalExperimentContext.IsCatch),
-            FormalExperimentContext.CatchType,
-            OptionalFloat(FormalExperimentContext.RequestedThetaDeg),
-            OptionalFloat(FormalExperimentContext.EventStartTime),
-            OptionalFloat(FormalExperimentContext.InjectionStartTime),
-            OptionalFloat(FormalExperimentContext.ResponseDeadlineTime),
-            OptionalFloat(FormalExperimentContext.ResponseTime),
-            OptionalFloat(FormalExperimentContext.ResponseRtSec),
-            FormalExperimentContext.ResponseAccepted.HasValue
-                ? BoolString(FormalExperimentContext.ResponseAccepted.Value)
+            snapshot.HasValue ? snapshot.Value.ParticipantId : FormalExperimentContext.ParticipantId,
+            snapshot.HasValue ? snapshot.Value.SessionId : FormalExperimentContext.SessionId,
+            snapshot.HasValue ? snapshot.Value.RunId : FormalExperimentContext.RunId,
+            snapshot.HasValue ? snapshot.Value.TrialId : FormalExperimentContext.TrialId,
+            snapshot.HasValue ? snapshot.Value.EvaluationId : FormalExperimentContext.EvaluationId,
+            snapshot.HasValue ? snapshot.Value.TrialType : FormalExperimentContext.TrialType,
+            BoolString(snapshot.HasValue ? snapshot.Value.IsCatch : FormalExperimentContext.IsCatch),
+            snapshot.HasValue ? snapshot.Value.CatchType : FormalExperimentContext.CatchType,
+            OptionalFloat(snapshot.HasValue ? snapshot.Value.RequestedThetaDeg : FormalExperimentContext.RequestedThetaDeg),
+            OptionalFloat(snapshot.HasValue ? snapshot.Value.EventStartTime : FormalExperimentContext.EventStartTime),
+            OptionalFloat(snapshot.HasValue ? snapshot.Value.InjectionStartTime : FormalExperimentContext.InjectionStartTime),
+            OptionalFloat(snapshot.HasValue ? snapshot.Value.ResponseDeadlineTime : FormalExperimentContext.ResponseDeadlineTime),
+            OptionalFloat(snapshot.HasValue ? snapshot.Value.ResponseTime : FormalExperimentContext.ResponseTime),
+            OptionalFloat(snapshot.HasValue ? snapshot.Value.ResponseRtSec : FormalExperimentContext.ResponseRtSec),
+            (snapshot.HasValue ? snapshot.Value.ResponseAccepted : FormalExperimentContext.ResponseAccepted).HasValue
+                ? BoolString((snapshot.HasValue ? snapshot.Value.ResponseAccepted : FormalExperimentContext.ResponseAccepted).Value)
                 : "",
-            OptionalFloat(FormalExperimentContext.WalkingSpeedAtTriggerMps),
-            OptionalFloat(FormalExperimentContext.WalkingSpeedAtInjectionMps),
-            FormalExperimentContext.UserTurnCongruency,
+            OptionalFloat(snapshot.HasValue ? snapshot.Value.WalkingSpeedAtTriggerMps : FormalExperimentContext.WalkingSpeedAtTriggerMps),
+            OptionalFloat(snapshot.HasValue ? snapshot.Value.WalkingSpeedAtInjectionMps : FormalExperimentContext.WalkingSpeedAtInjectionMps),
+            row.preEventMeanSpeedMps,
+            row.preEventMinSpeedMps,
+            row.duringEventMeanSpeedMps,
+            row.duringEventMinSpeedMps,
+            row.postEventMeanSpeedMps,
+            row.postEventMinSpeedMps,
+            snapshot.HasValue ? snapshot.Value.UserTurnCongruency : FormalExperimentContext.UserTurnCongruency,
             string.IsNullOrEmpty(row.actualAppliedThetaDeg)
-                ? OptionalFloat(FormalExperimentContext.ActualAppliedThetaDeg)
+                ? OptionalFloat(snapshot.HasValue ? snapshot.Value.ActualAppliedThetaDeg : FormalExperimentContext.ActualAppliedThetaDeg)
                 : row.actualAppliedThetaDeg,
+            OptionalFloat(snapshot.HasValue ? snapshot.Value.AppliedThetaAtResponseDeg : FormalExperimentContext.AppliedThetaAtResponseDeg),
             row.sceneName,
             row.conditionKey,
             row.anchorMode,
@@ -409,6 +526,7 @@ public static class FormalExperimentContext
     public static float WalkingSpeedAtInjectionMps { get; private set; } = float.NaN;
     public static string UserTurnCongruency { get; private set; } = "";
     public static float ActualAppliedThetaDeg { get; private set; } = float.NaN;
+    public static float AppliedThetaAtResponseDeg { get; private set; } = float.NaN;
 
     private static int runCounter;
     private static int trialCounter;
@@ -524,6 +642,11 @@ public static class FormalExperimentContext
         ActualAppliedThetaDeg = appliedThetaDeg;
     }
 
+    public static void RecordAppliedThetaAtResponse(float appliedThetaDeg)
+    {
+        AppliedThetaAtResponseDeg = appliedThetaDeg;
+    }
+
     public static void CompleteTrial()
     {
         trialOpen = false;
@@ -568,6 +691,7 @@ public static class FormalExperimentContext
         WalkingSpeedAtInjectionMps = float.NaN;
         UserTurnCongruency = "";
         ActualAppliedThetaDeg = float.NaN;
+        AppliedThetaAtResponseDeg = float.NaN;
     }
 
     private static string SanitizeIdentifier(string value)

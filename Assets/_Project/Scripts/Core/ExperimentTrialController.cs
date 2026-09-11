@@ -446,7 +446,9 @@ public class ExperimentTrialController : MonoBehaviour
                 "TRIAL_FINISH",
                 maskingEventManager,
                 -1f,
-                $"stopReason={searchFlowController.StopReason};thresholdReliable={searchFlowController.ThresholdReliable.ToString().ToLowerInvariant()}"
+                $"stopReason={searchFlowController.StopReason};" +
+                $"thresholdReliable={searchFlowController.ThresholdReliable.ToString().ToLowerInvariant()};" +
+                $"thresholdEstimateStatus={searchFlowController.GetThresholdEstimateStatus()}"
             );
 
             resultLogged = true;

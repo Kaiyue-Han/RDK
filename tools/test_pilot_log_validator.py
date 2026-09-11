@@ -143,6 +143,72 @@ class InjectionValidityPolicyTests(unittest.TestCase):
         assert_no_fail(self, validator.check_hard_deadline_incomplete(rows, 0.01))
         assert_no_fail(self, validator.check_invalid_evaluations(rows, 0.01))
 
+    def test_accepted_response_can_stop_partial_injection_and_remain_valid(self) -> None:
+        rows = event_rows(
+            "INJECTION_STOPPED_AFTER_ACCEPTED_RESPONSE",
+            "STOPPED_AFTER_ACCEPTED_RESPONSE",
+            "12",
+            "100.450",
+        )
+        rows[-1].update(
+            {
+                "response_time_sec": "100.450",
+                "response_rt_sec": "0.250",
+                "response_deadline_time_sec": "102.200",
+                "response_accepted": "true",
+                "noticed": "true",
+                "applied_theta_at_response_deg": "12",
+            }
+        )
+        rows.append(
+            row(
+                "RESPONSE_ACCEPTED",
+                timeSec="100.450",
+                response_time_sec="100.450",
+                response_rt_sec="0.250",
+                response_deadline_time_sec="102.200",
+                response_accepted="true",
+                noticed="true",
+                actual_applied_theta_deg="12",
+                applied_theta_at_response_deg="12",
+            )
+        )
+        rows.append(
+            row(
+                "STAIRCASE_EVAL_FINISH",
+                timeSec="100.450",
+                validTrial="true",
+                noticed="true",
+                testThetaDeg="20",
+                currentStepDeg="2",
+                staircaseDeltaDeg="-2",
+                nextThetaDeg="18",
+                isReversal="false",
+                actual_applied_theta_deg="12",
+                applied_theta_at_response_deg="12",
+            )
+        )
+        number_rows(rows)
+        assert_no_fail(self, validator.check_requested_vs_applied(rows, 0.01))
+        assert_no_fail(self, validator.check_response_timing(rows, 0.01))
+
+    def test_walking_speed_summary(self) -> None:
+        rows = [
+            row("STAIRCASE_EVAL_START"),
+            row("INJECTION_START"),
+            row(
+                "WALKING_SPEED_SUMMARY",
+                pre_event_mean_speed_mps="1.00",
+                pre_event_min_speed_mps="0.80",
+                during_event_mean_speed_mps="0.75",
+                during_event_min_speed_mps="0.40",
+                post_event_mean_speed_mps="0.90",
+                post_event_min_speed_mps="0.60",
+            ),
+        ]
+        number_rows(rows)
+        assert_no_fail(self, validator.check_walking_speed(rows, 5.0))
+
 
 if __name__ == "__main__":
     unittest.main()

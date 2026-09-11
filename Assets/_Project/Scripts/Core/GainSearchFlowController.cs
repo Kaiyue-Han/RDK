@@ -35,9 +35,9 @@ public class GainSearchFlowController : MonoBehaviour
 
     [Header("Staircase Start")]
     [SerializeField] private StaircaseStartMode startMode = StaircaseStartMode.HighStart;
-    [SerializeField] private float highStartThetaDeg = 20f;
-    [SerializeField] private float lowStartThetaDeg = 10f;
-    [SerializeField] private float customStartThetaDeg = 20f;
+    [SerializeField] private float highStartThetaDeg = 4f;
+    [SerializeField] private float lowStartThetaDeg = 4f;
+    [SerializeField] private float customStartThetaDeg = 4f;
 
     [Header("Staircase Parameters")]
     [SerializeField] private float initialStepDeg = 2f;
@@ -45,9 +45,14 @@ public class GainSearchFlowController : MonoBehaviour
     [SerializeField] private int stepReductionAfterReversals = 2;
     [SerializeField] private int targetReversalCount = 12;
     [SerializeField] private int ignoreFirstReversals = 2;
+    [Tooltip("Minimum reversals required to report an estimate when the valid-trial cap is reached before the target reversal count.")]
+    [SerializeField] private int minimumUsableReversals = 1;
     [SerializeField] private int maxValidTrials = 30;
     [SerializeField] private float minThetaDeg = 0f;
-    [SerializeField] private float maxThetaDeg = 25f;
+    [SerializeField] private float maxThetaDeg = 15f;
+    [Tooltip("Mark the estimate as boundary-limited after this many consecutive valid normal evaluations attempt to move beyond the same theta boundary.")]
+    [Min(1)]
+    [SerializeField] private int boundaryLimitedAfterConsecutiveClampedTrials = 3;
 
     [Header("Catch Events")]
     [Tooltip("Insert control trials that do not update the staircase.")]
@@ -63,12 +68,20 @@ public class GainSearchFlowController : MonoBehaviour
 
     [Tooltip("Extra event theta used by the high catch. It is clamped to the injection hard maximum. Zero catches always use 0 degrees.")]
     [Min(0f)]
-    [SerializeField] private float highCatchThetaDeg = 25f;
+    [SerializeField] private float highCatchThetaDeg = 15f;
 
     [Header("Formal Response Window")]
     [Tooltip("Deadline is actual injection start plus this duration. The visual event may end before the response window.")]
     [Min(0.1f)]
-    [SerializeField] private float responseWindowSec = 3.0f;
+    [SerializeField] private float responseWindowSec = 2.0f;
+
+    public float ResponseWindowSec => Mathf.Max(0.1f, responseWindowSec);
+
+    [Header("Event-related walking-speed summary")]
+    [Min(0.1f)]
+    [SerializeField] private float preEventSpeedWindowSec = 1.0f;
+    [Min(0.1f)]
+    [SerializeField] private float postEventSpeedWindowSec = 1.0f;
 
     [Header("Debug Keyboard")]
     [SerializeField] private bool enableDebugKeyboard = true;
@@ -86,10 +99,12 @@ public class GainSearchFlowController : MonoBehaviour
     public int ValidTrialCount => validTrialCount;
     public int ReversalCount => reversalThetas.Count;
     public int TargetReversalCount => targetReversalCount;
+    public int MinimumUsableReversals => Mathf.Max(ignoreFirstReversals + 1, minimumUsableReversals);
     public int MaxValidTrials => Mathf.Max(1, maxValidTrials);
     public float EstimatedThresholdDeg => estimatedThresholdDeg;
     public bool HasEstimatedThreshold => hasEstimatedThreshold;
     public bool ThresholdReliable => thresholdReliable;
+    public bool BoundaryLimitedEstimate => boundaryLimitedEstimate;
     public string StopReason => stopReason;
 
     public EvaluationTrialType CurrentEvaluationTrialType => currentEvaluationTrialType;
@@ -131,6 +146,8 @@ public class GainSearchFlowController : MonoBehaviour
     private float estimatedThresholdDeg = 0f;
     private bool hasEstimatedThreshold = false;
     private bool thresholdReliable = false;
+    private bool boundaryLimitedEstimate = false;
+    private int consecutiveBoundaryClampedTrials = 0;
     private string stopReason = "NONE";
 
     private bool noticedDuringCurrentEvaluation = false;
@@ -156,27 +173,79 @@ public class GainSearchFlowController : MonoBehaviour
     private int highCatchCount = 0;
     private int highCatchHitCount = 0;
 
+    private struct SpeedSample
+    {
+        public float time;
+        public float speed;
+
+        public SpeedSample(float time, float speed)
+        {
+            this.time = time;
+            this.speed = speed;
+        }
+    }
+
+    private struct SpeedAccumulator
+    {
+        public float weightedSum;
+        public float duration;
+        public float minimum;
+        public bool hasSample;
+
+        public void Add(float speed, float seconds)
+        {
+            if (seconds <= 0f)
+                return;
+
+            weightedSum += Mathf.Max(0f, speed) * seconds;
+            duration += seconds;
+            minimum = hasSample ? Mathf.Min(minimum, speed) : Mathf.Max(0f, speed);
+            hasSample = true;
+        }
+
+        public float Mean => duration > 1e-5f ? weightedSum / duration : 0f;
+        public float Min => hasSample ? minimum : 0f;
+    }
+
+    private readonly List<SpeedSample> recentSpeedSamples = new List<SpeedSample>(128);
+    private bool walkingSummaryActive;
+    private float walkingSummaryEventStart;
+    private float walkingSummaryEventEnd;
+    private float walkingSummaryPostEnd;
+    private SpeedAccumulator preEventSpeed;
+    private SpeedAccumulator duringEventSpeed;
+    private SpeedAccumulator postEventSpeed;
+    private EventLogger.EvaluationSnapshot walkingSummaryEvaluationSnapshot;
+
     private void OnEnable()
     {
         if (maskingEventManager != null)
+        {
             maskingEventManager.OnOcclusionEnded += HandleOcclusionEnded;
+            maskingEventManager.OnFormalEventStarted += HandleFormalEventStartedForWalkingSummary;
+        }
 
         if (injectionController != null)
         {
             injectionController.OnInjectionStarted += HandleInjectionStarted;
             injectionController.OnInjectionCompleted += HandleInjectionCompleted;
+            injectionController.OnEvaluationInvalidated += HandleEvaluationInvalidated;
         }
     }
 
     private void OnDisable()
     {
         if (maskingEventManager != null)
+        {
             maskingEventManager.OnOcclusionEnded -= HandleOcclusionEnded;
+            maskingEventManager.OnFormalEventStarted -= HandleFormalEventStartedForWalkingSummary;
+        }
 
         if (injectionController != null)
         {
             injectionController.OnInjectionStarted -= HandleInjectionStarted;
             injectionController.OnInjectionCompleted -= HandleInjectionCompleted;
+            injectionController.OnEvaluationInvalidated -= HandleEvaluationInvalidated;
         }
     }
 
@@ -193,6 +262,8 @@ public class GainSearchFlowController : MonoBehaviour
 
     private void Update()
     {
+        UpdateWalkingSpeedSummary();
+
         if (enableDebugKeyboard)
         {
             if (Input.GetKeyDown(startSearchKey))
@@ -254,6 +325,8 @@ public class GainSearchFlowController : MonoBehaviour
         estimatedThresholdDeg = 0f;
         hasEstimatedThreshold = false;
         thresholdReliable = false;
+        boundaryLimitedEstimate = false;
+        consecutiveBoundaryClampedTrials = 0;
         stopReason = "RUNNING";
 
         noticedDuringCurrentEvaluation = false;
@@ -298,9 +371,11 @@ public class GainSearchFlowController : MonoBehaviour
             $"stepReductionAfterReversals={stepReductionAfterReversals};" +
             $"targetReversalCount={targetReversalCount};" +
             $"ignoreFirstReversals={ignoreFirstReversals};" +
+            $"minimumUsableReversals={MinimumUsableReversals};" +
             $"maxValidTrials={Mathf.Max(1, maxValidTrials)};" +
             $"minThetaDeg={FormatFloat(minThetaDeg)};" +
             $"maxThetaDeg={FormatFloat(maxThetaDeg)};" +
+            $"boundaryLimitedAfterConsecutiveClampedTrials={Mathf.Max(1, boundaryLimitedAfterConsecutiveClampedTrials)};" +
             $"catchEventsEnabled={enableCatchEvents.ToString().ToLowerInvariant()};" +
             $"catchIntervalValidNormalTrials={Mathf.Max(1, minNormalTrialsBetweenCatch)}-{Mathf.Max(Mathf.Max(1, minNormalTrialsBetweenCatch), maxNormalTrialsBetweenCatch)};" +
             $"zeroCatchThetaDeg=0.000;" +
@@ -460,6 +535,8 @@ public class GainSearchFlowController : MonoBehaviour
         float staircaseThetaBeforeFinish = currentTestThetaDeg;
         bool noticedBeforeFinish = noticedDuringCurrentEvaluation;
 
+        RefreshWalkingSummaryEvaluationSnapshot();
+
         if (responseWindowOpen && !responseAccepted)
         {
             if (debugLog)
@@ -470,8 +547,12 @@ public class GainSearchFlowController : MonoBehaviour
         bool injectionActuallyCompleted =
             injectionController != null &&
             injectionController.CurrentEvaluationInjectionCompleted;
+        bool injectionConcludedByAcceptedResponse =
+            responseAccepted &&
+            injectionController != null &&
+            injectionController.CurrentEvaluationConcludedByAcceptedResponse;
 
-        if (!injectionActuallyCompleted)
+        if (!injectionActuallyCompleted && !injectionConcludedByAcceptedResponse)
         {
             string outcome = injectionController != null
                 ? injectionController.CurrentEvaluationInjectionOutcome
@@ -596,6 +677,8 @@ public class GainSearchFlowController : MonoBehaviour
         evaluationPending = false;
         evaluationInProgress = false;
         noticedDuringCurrentEvaluation = false;
+        walkingSummaryActive = false;
+        walkingSummaryEvaluationSnapshot = default;
 
         ResetResponseState();
 
@@ -641,12 +724,16 @@ public class GainSearchFlowController : MonoBehaviour
         estimatedThresholdDeg = 0f;
         hasEstimatedThreshold = false;
         thresholdReliable = false;
+        boundaryLimitedEstimate = false;
+        consecutiveBoundaryClampedTrials = 0;
         stopReason = "RESET";
 
         noticedDuringCurrentEvaluation = false;
 
         evaluationPending = false;
         evaluationInProgress = false;
+        walkingSummaryActive = false;
+        walkingSummaryEvaluationSnapshot = default;
 
         ResetResponseState();
 
@@ -699,7 +786,7 @@ public class GainSearchFlowController : MonoBehaviour
             return;
 
         responseTime = float.NaN;
-        responseDeadline = actualInjectionStartTime + Mathf.Max(0.1f, responseWindowSec);
+        responseDeadline = actualInjectionStartTime + ResponseWindowSec;
         responseWindowOpen = true;
 
         if (participantFeedback != null)
@@ -726,17 +813,171 @@ public class GainSearchFlowController : MonoBehaviour
                 $"windowSec={FormatFloat(responseWindowSec)}"
             );
         }
+
+        RefreshWalkingSummaryEvaluationSnapshot();
+    }
+
+    private void HandleFormalEventStartedForWalkingSummary(
+        MaskingEventManager.FormalEventTiming timing
+    )
+    {
+        if (!evaluationInProgress)
+            return;
+
+        walkingSummaryEventStart = timing.EventStartTime;
+        walkingSummaryEventEnd = timing.EventEndTime;
+        walkingSummaryPostEnd = timing.EventEndTime + Mathf.Max(0.1f, postEventSpeedWindowSec);
+        preEventSpeed = CalculateRecentSpeedWindow(
+            timing.EventStartTime - Mathf.Max(0.1f, preEventSpeedWindowSec),
+            timing.EventStartTime
+        );
+        duringEventSpeed = default;
+        postEventSpeed = default;
+        RefreshWalkingSummaryEvaluationSnapshot();
+        walkingSummaryActive = true;
+    }
+
+    private void UpdateWalkingSpeedSummary()
+    {
+        float now = Time.time;
+        float speed = injectionController != null
+            ? injectionController.CurrentWalkingSpeedMps
+            : 0f;
+
+        recentSpeedSamples.Add(new SpeedSample(now, speed));
+        float oldestNeeded = now - Mathf.Max(0.1f, preEventSpeedWindowSec) - 0.25f;
+        while (recentSpeedSamples.Count > 1 && recentSpeedSamples[1].time < oldestNeeded)
+            recentSpeedSamples.RemoveAt(0);
+
+        if (!walkingSummaryActive)
+            return;
+
+        float frameStart = Mathf.Max(0f, now - Mathf.Max(Time.deltaTime, 0f));
+        AddOverlappingSpeed(
+            ref duringEventSpeed,
+            speed,
+            frameStart,
+            now,
+            walkingSummaryEventStart,
+            walkingSummaryEventEnd
+        );
+        AddOverlappingSpeed(
+            ref postEventSpeed,
+            speed,
+            frameStart,
+            now,
+            walkingSummaryEventEnd,
+            walkingSummaryPostEnd
+        );
+
+        if (now < walkingSummaryPostEnd)
+            return;
+
+        if (eventLogger != null && maskingEventManager != null)
+        {
+            eventLogger.LogWalkingSpeedSummary(
+                maskingEventManager,
+                walkingSummaryEvaluationSnapshot,
+                preEventSpeed.Mean,
+                preEventSpeed.Min,
+                duringEventSpeed.Mean,
+                duringEventSpeed.Min,
+                postEventSpeed.Mean,
+                postEventSpeed.Min,
+                Mathf.Max(0.1f, preEventSpeedWindowSec),
+                Mathf.Max(0f, walkingSummaryEventEnd - walkingSummaryEventStart),
+                Mathf.Max(0.1f, postEventSpeedWindowSec)
+            );
+        }
+
+        walkingSummaryActive = false;
+        walkingSummaryEvaluationSnapshot = default;
+    }
+
+    private void RefreshWalkingSummaryEvaluationSnapshot()
+    {
+        if (!walkingSummaryActive && !evaluationInProgress)
+            return;
+
+        walkingSummaryEvaluationSnapshot =
+            new EventLogger.EvaluationSnapshot(maskingEventManager);
+    }
+
+    private SpeedAccumulator CalculateRecentSpeedWindow(float startTime, float endTime)
+    {
+        SpeedAccumulator result = default;
+
+        for (int i = 0; i < recentSpeedSamples.Count; i++)
+        {
+            float segmentStart = Mathf.Max(startTime, recentSpeedSamples[i].time);
+            float segmentEnd = i + 1 < recentSpeedSamples.Count
+                ? Mathf.Min(endTime, recentSpeedSamples[i + 1].time)
+                : endTime;
+            result.Add(recentSpeedSamples[i].speed, Mathf.Max(0f, segmentEnd - segmentStart));
+        }
+
+        return result;
+    }
+
+    private static void AddOverlappingSpeed(
+        ref SpeedAccumulator accumulator,
+        float speed,
+        float frameStart,
+        float frameEnd,
+        float windowStart,
+        float windowEnd
+    )
+    {
+        float overlapStart = Mathf.Max(frameStart, windowStart);
+        float overlapEnd = Mathf.Min(frameEnd, windowEnd);
+        accumulator.Add(speed, Mathf.Max(0f, overlapEnd - overlapStart));
     }
 
     private void HandleInjectionCompleted(float completionTime)
     {
+        RefreshWalkingSummaryEvaluationSnapshot();
         TryFinishEvaluationAfterResponse();
+    }
+
+    private void HandleEvaluationInvalidated(string reason)
+    {
+        if (!evaluationInProgress)
+            return;
+
+        ResetResponseState();
+
+        if (participantFeedback != null)
+            participantFeedback.ResetState(false);
+
+        NotifyCurrentEvaluationFinished();
     }
 
     private void AcceptResponse(float acceptedResponseTime)
     {
         if (!evaluationInProgress || !responseWindowOpen || responseAccepted)
             return;
+
+        if (
+            injectionController == null ||
+            !injectionController.TryStopAfterAcceptedResponse(
+                out float appliedThetaAtResponseDeg
+            )
+        )
+        {
+            // Invalidation raises a synchronous notification and may already
+            // have completed the invalid-evaluation retry path.
+            if (!evaluationInProgress)
+                return;
+
+            // An invalidating state that began before the response retains
+            // priority. The existing invalid-evaluation path retries the same
+            // planned trial without updating staircase or catch state.
+            ResetResponseState();
+            if (participantFeedback != null)
+                participantFeedback.ResetState(false);
+            NotifyCurrentEvaluationFinished();
+            return;
+        }
 
         responseAccepted = true;
         responseWindowOpen = false;
@@ -747,6 +988,9 @@ public class GainSearchFlowController : MonoBehaviour
             participantFeedback.DisableListening();
 
         FormalExperimentContext.RecordResponse(responseTime, true);
+        FormalExperimentContext.RecordAppliedThetaAtResponse(
+            appliedThetaAtResponseDeg
+        );
 
         if (eventLogger != null && maskingEventManager != null)
         {
@@ -770,8 +1014,15 @@ public class GainSearchFlowController : MonoBehaviour
         bool injectionCompleted =
             injectionController != null &&
             injectionController.CurrentEvaluationInjectionCompleted;
+        bool injectionConcludedByAcceptedResponse =
+            responseAccepted &&
+            injectionController != null &&
+            injectionController.CurrentEvaluationConcludedByAcceptedResponse;
 
-        if (responseResolved && injectionCompleted)
+        if (
+            responseResolved &&
+            (injectionCompleted || injectionConcludedByAcceptedResponse)
+        )
             NotifyCurrentEvaluationFinished();
     }
 
@@ -805,6 +1056,26 @@ public class GainSearchFlowController : MonoBehaviour
 
         float staircaseDeltaDeg = deltaSign * currentStepDeg;
         float nextThetaDeg = Mathf.Clamp(testThetaBeforeFinish + staircaseDeltaDeg, minThetaDeg, maxThetaDeg);
+
+        bool clampedAtLowerBoundary =
+            Mathf.Approximately(testThetaBeforeFinish, minThetaDeg) &&
+            staircaseDeltaDeg < 0f &&
+            Mathf.Approximately(nextThetaDeg, testThetaBeforeFinish);
+        bool clampedAtUpperBoundary =
+            Mathf.Approximately(testThetaBeforeFinish, maxThetaDeg) &&
+            staircaseDeltaDeg > 0f &&
+            Mathf.Approximately(nextThetaDeg, testThetaBeforeFinish);
+
+        if (clampedAtLowerBoundary || clampedAtUpperBoundary)
+        {
+            consecutiveBoundaryClampedTrials++;
+            if (consecutiveBoundaryClampedTrials >= Mathf.Max(1, boundaryLimitedAfterConsecutiveClampedTrials))
+                boundaryLimitedEstimate = true;
+        }
+        else
+        {
+            consecutiveBoundaryClampedTrials = 0;
+        }
 
         if (eventLogger != null && maskingEventManager != null)
         {
@@ -891,6 +1162,8 @@ public class GainSearchFlowController : MonoBehaviour
                 stopReason,
                 $"thresholdReliable={thresholdReliable.ToString().ToLowerInvariant()};" +
                 $"hasEstimatedThreshold={hasEstimatedThreshold.ToString().ToLowerInvariant()};" +
+                $"boundaryLimitedEstimate={boundaryLimitedEstimate.ToString().ToLowerInvariant()};" +
+                $"thresholdEstimateStatus={GetThresholdEstimateStatus()};" +
                 BuildCatchSummaryExtra()
             );
         }
@@ -910,6 +1183,9 @@ public class GainSearchFlowController : MonoBehaviour
     {
         threshold = 0f;
 
+        if (reversalThetas.Count < MinimumUsableReversals)
+            return false;
+
         int startIndex = Mathf.Clamp(ignoreFirstReversals, 0, reversalThetas.Count);
         int usedCount = reversalThetas.Count - startIndex;
         if (usedCount <= 0)
@@ -921,6 +1197,19 @@ public class GainSearchFlowController : MonoBehaviour
 
         threshold = sum / usedCount;
         return true;
+    }
+
+    public string GetThresholdEstimateStatus()
+    {
+        if (!hasEstimatedThreshold)
+            return "INSUFFICIENT_STAIRCASE";
+
+        if (boundaryLimitedEstimate)
+            return "BOUNDARY_LIMITED_ESTIMATE";
+
+        return thresholdReliable
+            ? "COMPLETE_STAIRCASE"
+            : "INCOMPLETE_STAIRCASE";
     }
 
     private string BuildUsedReversalsString()

@@ -31,6 +31,9 @@ public class GainRecordTriggerController : MonoBehaviour
     [Min(0f)]
     [SerializeField] private float baseStabilityToleranceDegPerSec = 1.0f;
 
+    [Tooltip("If true, the base rotation sign must remain unchanged throughout the stability window.")]
+    [SerializeField] private bool requireStableBaseDirection = true;
+
     [Tooltip("After the base is frozen, keep the same base with no occluder for this long before the event starts (seconds).")]
     [Min(0f)]
     [SerializeField] private float preEventBaselineSec = 1.0f;
@@ -42,6 +45,7 @@ public class GainRecordTriggerController : MonoBehaviour
     [SerializeField] private float stableBaseElapsedSec = 0f;
     [SerializeField] private float stableBaseMin = 0f;
     [SerializeField] private float stableBaseMax = 0f;
+    [SerializeField] private float stableBaseAverage = 0f;
     [SerializeField] private float baselineElapsedSec = 0f;
     [SerializeField] private float frozenBaseYawRate = 0f;
 
@@ -51,7 +55,11 @@ public class GainRecordTriggerController : MonoBehaviour
     private bool stabilityTrackingActive = false;
     private float stabilityStartTime = 0f;
     private float stabilitySign = 0f;
+    private float stableBaseIntegral = 0f;
+    private float stableBaseIntegrationTime = 0f;
     private float baselineStartTime = 0f;
+    private float baseReleaseDeadline = float.NaN;
+    private bool occlusionWindowEnded = false;
 
     private void Awake()
     {
@@ -63,6 +71,9 @@ public class GainRecordTriggerController : MonoBehaviour
     {
         if (maskingEventManager != null)
             maskingEventManager.OnOcclusionEnded += HandleOcclusionEnded;
+
+        if (injectionController != null)
+            injectionController.OnInjectionStarted += HandleInjectionStarted;
     }
 
     private void OnDisable()
@@ -70,15 +81,30 @@ public class GainRecordTriggerController : MonoBehaviour
         if (maskingEventManager != null)
             maskingEventManager.OnOcclusionEnded -= HandleOcclusionEnded;
 
+        if (injectionController != null)
+            injectionController.OnInjectionStarted -= HandleInjectionStarted;
+
         CancelPreparation(false);
     }
 
     private void Update()
     {
-        // Once the formal event has started, keep the base frozen until
-        // MaskingEventManager reports that the event window has ended.
+        // Once the formal event has started, keep the base frozen through the
+        // fixed response deadline. An early accepted response must not shorten
+        // this interval and create response-contingent base behaviour.
         if (preEventState == PreEventState.EventActive)
+        {
+            if (
+                occlusionWindowEnded &&
+                !float.IsNaN(baseReleaseDeadline) &&
+                Time.time >= baseReleaseDeadline
+            )
+            {
+                ReleaseBaseAfterResponseDeadline();
+            }
+
             return;
+        }
 
         if (!CanEvaluate())
         {
@@ -108,7 +134,8 @@ public class GainRecordTriggerController : MonoBehaviour
             return;
         }
 
-        // Cooldown is measured between actual event starts.
+        // Cooldown is measured between actual event starts. Preparation for the
+        // next event begins only after the complete cooldown has elapsed.
         if (Time.time < lastTriggerTime + triggerCooldownSec)
         {
             CancelPreparation(false);
@@ -143,7 +170,7 @@ public class GainRecordTriggerController : MonoBehaviour
 
         // The user has now experienced a stable smoothed base for the requested
         // duration. Freeze exactly that experienced base value.
-        worldRotator.FreezeBase();
+        worldRotator.FreezeBase(stableBaseAverage);
         frozenBaseYawRate = worldRotator.FrozenBaseYawRate;
 
         preEventState = PreEventState.BaselineLocked;
@@ -207,6 +234,8 @@ public class GainRecordTriggerController : MonoBehaviour
 
         lastTriggerTime = Time.time;
         preEventState = PreEventState.EventActive;
+        baseReleaseDeadline = float.NaN;
+        occlusionWindowEnded = false;
 
         if (logDebug)
         {
@@ -234,7 +263,7 @@ public class GainRecordTriggerController : MonoBehaviour
         }
 
         // A direction change means this is not one stable background condition.
-        if (currentSign == 0f || currentSign != stabilitySign)
+        if (requireStableBaseDirection && (currentSign == 0f || currentSign != stabilitySign))
         {
             StartStabilityTracking(currentBaseYawRate, currentSign);
             return false;
@@ -252,6 +281,13 @@ public class GainRecordTriggerController : MonoBehaviour
             return false;
         }
 
+        float sampleDuration = Mathf.Max(Time.deltaTime, 0f);
+        stableBaseIntegral += currentBaseYawRate * sampleDuration;
+        stableBaseIntegrationTime += sampleDuration;
+        stableBaseAverage = stableBaseIntegrationTime > 0f
+            ? stableBaseIntegral / stableBaseIntegrationTime
+            : currentBaseYawRate;
+
         stableBaseElapsedSec = Time.time - stabilityStartTime;
         return stableBaseElapsedSec >= baseStableDurationSec;
     }
@@ -263,6 +299,9 @@ public class GainRecordTriggerController : MonoBehaviour
         stabilitySign = currentSign;
         stableBaseMin = currentBaseYawRate;
         stableBaseMax = currentBaseYawRate;
+        stableBaseAverage = currentBaseYawRate;
+        stableBaseIntegral = 0f;
+        stableBaseIntegrationTime = 0f;
         stableBaseElapsedSec = 0f;
     }
 
@@ -274,25 +313,46 @@ public class GainRecordTriggerController : MonoBehaviour
         stableBaseElapsedSec = 0f;
         stableBaseMin = 0f;
         stableBaseMax = 0f;
+        stableBaseAverage = 0f;
+        stableBaseIntegral = 0f;
+        stableBaseIntegrationTime = 0f;
     }
 
     private void HandleOcclusionEnded()
     {
-        // Keep the background base identical through the complete event window,
-        // then release it. WorldRotator resumes smoothing from the frozen value.
+        occlusionWindowEnded = true;
+
+        // Injection normally starts before the visual event ends. If it did not
+        // start, there is no valid response deadline to wait for, so release now.
+        if (float.IsNaN(baseReleaseDeadline) || Time.time >= baseReleaseDeadline)
+            ReleaseBaseAfterResponseDeadline();
+    }
+
+    private void HandleInjectionStarted(float actualInjectionStartTime)
+    {
+        float responseWindowSec = searchFlowController != null
+            ? searchFlowController.ResponseWindowSec
+            : 2.0f;
+        baseReleaseDeadline = actualInjectionStartTime + responseWindowSec;
+    }
+
+    private void ReleaseBaseAfterResponseDeadline()
+    {
         if (worldRotator != null)
             worldRotator.UnfreezeBase();
 
         if (logDebug && preEventState == PreEventState.EventActive)
         {
             Debug.Log(
-                $"[GainRecordTrigger] Event ended. Base unfrozen from " +
+                $"[GainRecordTrigger] Response deadline reached. Base unfrozen from " +
                 $"{frozenBaseYawRate:F2}deg/s."
             );
         }
 
         frozenBaseYawRate = 0f;
         baselineElapsedSec = 0f;
+        baseReleaseDeadline = float.NaN;
+        occlusionWindowEnded = false;
         preEventState = PreEventState.WaitingForStableBase;
         ResetStabilityTracking();
     }
@@ -316,6 +376,8 @@ public class GainRecordTriggerController : MonoBehaviour
 
         frozenBaseYawRate = 0f;
         baselineElapsedSec = 0f;
+        baseReleaseDeadline = float.NaN;
+        occlusionWindowEnded = false;
 
         if (preEventState != PreEventState.EventActive)
             preEventState = PreEventState.WaitingForStableBase;
@@ -372,6 +434,8 @@ public class GainRecordTriggerController : MonoBehaviour
         lastTriggerTime = -999f;
         frozenBaseYawRate = 0f;
         baselineElapsedSec = 0f;
+        baseReleaseDeadline = float.NaN;
+        occlusionWindowEnded = false;
         preEventState = PreEventState.WaitingForStableBase;
 
         ResetStabilityTracking();

@@ -11,7 +11,7 @@ public sealed class TrainingDemoController : MonoBehaviour
 
     private const int TrainingOcclusionRatio = 70;
     private const float Example1ThetaDeg = 0f;
-    private const float Example2ThetaDeg = 20f;
+    private const float Example2ThetaDeg = 15f;
 
     [Header("Shared event components")]
     [SerializeField] private MaskingEventManager maskingEventManager;
