@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: c1c2d358550a13c4f9d21734ad32e6e9
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 9100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 330238
+  packageName: Bird
+  packageVersion: 1.0
+  assetPath: Assets/Zacxophone/Birds/Animators/10BirdsAnimator.controller
+  uploadId: 781337
